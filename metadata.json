@@ -1,0 +1,6 @@
+{
+  "name": "Sarhisob AI - Shaxsiy Moliyaviy Menejer",
+  "description": "Sun'iy intellekt yordamida kirim-chiqimlarni tahlil qiluvchi, tejash tavsiyalari va kelgusi xarajat prognozlarini beruvchi shaxsiy moliyaviy tizim hamda Telegram bot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
