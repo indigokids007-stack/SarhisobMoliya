@@ -12,10 +12,19 @@ import {
   ExternalLink,
   Loader2,
   RefreshCw,
-  Info
+  Info,
+  CheckCircle2,
+  AlertCircle,
+  Radio
 } from 'lucide-react';
 import { TelegramChatMessage, Transaction } from '../types';
 import { sendTelegramMessage } from '../services/api';
+import { 
+  testTelegramBotToken, 
+  sendTelegramNotification, 
+  setTelegramBotWebhook, 
+  TelegramBotConfig 
+} from '../services/telegramService';
 import { formatUZS } from '../utils/formatters';
 
 interface TelegramBotViewProps {
@@ -36,8 +45,23 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
-  const [botToken, setBotToken] = useState('');
   const [isCopied, setIsCopied] = useState(false);
+  
+  // Real Telegram bot states
+  const [botConfig, setBotConfig] = useState<TelegramBotConfig>(() => {
+    try {
+      const saved = localStorage.getItem('sarhisob_telegram_config');
+      return saved ? JSON.parse(saved) : { botToken: '', chatId: '' };
+    } catch {
+      return { botToken: '', chatId: '' };
+    }
+  });
+
+  const [testingToken, setTestingToken] = useState(false);
+  const [tokenStatus, setTokenStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [sendingTestNotify, setSendingTestNotify] = useState(false);
+  const [notifyStatus, setNotifyStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -47,6 +71,61 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  const handleTestBotToken = async () => {
+    if (!botConfig.botToken.trim()) {
+      setTokenStatus({ text: 'Iltimos, Bot Token kiriting', type: 'error' });
+      return;
+    }
+    setTestingToken(true);
+    setTokenStatus(null);
+    try {
+      const res = await testTelegramBotToken(botConfig.botToken);
+      if (res.ok && res.bot) {
+        const updated = {
+          ...botConfig,
+          botUsername: res.bot.username,
+          botFirstName: res.bot.first_name,
+          isConnected: true,
+          lastTestedAt: new Date().toISOString(),
+        };
+        setBotConfig(updated);
+        localStorage.setItem('sarhisob_telegram_config', JSON.stringify(updated));
+        setTokenStatus({
+          text: `Muvaffaqiyatli ulandi! Bot: @${res.bot.username} (${res.bot.first_name})`,
+          type: 'success',
+        });
+      } else {
+        setTokenStatus({ text: res.description || 'Token noto\'g\'ri', type: 'error' });
+      }
+    } catch (err: any) {
+      setTokenStatus({ text: err.message || 'Xatolik yuz berdi', type: 'error' });
+    } finally {
+      setTestingToken(false);
+    }
+  };
+
+  const handleSendLiveNotification = async () => {
+    if (!botConfig.botToken || !botConfig.chatId) {
+      setNotifyStatus({ text: 'Bot Token va Chat ID to\'ldirilishi shart', type: 'error' });
+      return;
+    }
+    setSendingTestNotify(true);
+    setNotifyStatus(null);
+    try {
+      const text = `🔔 *Sarhisob AI Moliyaviy Xabar*\n\n💰 *Joriy balans:* ${formatUZS(balance)}\n📊 *Tranzaksiyalar soni:* ${transactions.length} ta\n\n✅ Tizim va bot muvaffaqiyatli integratsiya qilindi!`;
+      const res = await sendTelegramNotification(botConfig.botToken, botConfig.chatId, text);
+      if (res.ok) {
+        setNotifyStatus({ text: 'Xabar Telegramga muvaffaqiyatli yetkazildi!', type: 'success' });
+      } else {
+        setNotifyStatus({ text: res.description || 'Telegram xatosi', type: 'error' });
+      }
+    } catch (err: any) {
+      setNotifyStatus({ text: err.message || 'Xatolik', type: 'error' });
+    } finally {
+      setSendingTestNotify(false);
+    }
+  };
 
   const handleSend = async (customText?: string) => {
     const textToSend = customText || inputText;
@@ -189,6 +268,98 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
             </div>
           </div>
 
+          {/* Bot Token input and connection test */}
+          <div className="p-5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                <Radio className="w-4 h-4 text-sky-400" />
+                <span>Haqiqiy Bot Token (Telegram Bot API)</span>
+              </label>
+              {botConfig.isConnected && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>@{botConfig.botUsername || 'Bot'} faol</span>
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={botConfig.botToken}
+                onChange={(e) => {
+                  const updated = { ...botConfig, botToken: e.target.value };
+                  setBotConfig(updated);
+                  localStorage.setItem('sarhisob_telegram_config', JSON.stringify(updated));
+                }}
+                placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz..."
+                className="flex-1 bg-slate-900 border border-slate-750 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              <button
+                onClick={handleTestBotToken}
+                disabled={testingToken}
+                className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
+              >
+                {testingToken ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                <span>{testingToken ? 'Tekshirilmoqda...' : 'Ulanishni tekshirish'}</span>
+              </button>
+            </div>
+
+            {tokenStatus && (
+              <div
+                className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
+                  tokenStatus.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                }`}
+              >
+                {tokenStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+                <span>{tokenStatus.text}</span>
+              </div>
+            )}
+
+            {/* Telegram Notification Test */}
+            <div className="pt-3 border-t border-slate-850 space-y-2">
+              <label className="text-xs font-medium text-slate-300">
+                Sizning Telegram Chat ID (yoki shaxsiy ID):
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={botConfig.chatId || ''}
+                  onChange={(e) => {
+                    const updated = { ...botConfig, chatId: e.target.value };
+                    setBotConfig(updated);
+                    localStorage.setItem('sarhisob_telegram_config', JSON.stringify(updated));
+                  }}
+                  placeholder="Masalan: 123456789"
+                  className="flex-1 bg-slate-900 border border-slate-750 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-500"
+                />
+                <button
+                  onClick={handleSendLiveNotification}
+                  disabled={sendingTestNotify}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
+                >
+                  {sendingTestNotify ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  <span>Sinov xabari yuborish</span>
+                </button>
+              </div>
+
+              {notifyStatus && (
+                <div
+                  className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
+                    notifyStatus.type === 'success'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                  }`}
+                >
+                  {notifyStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+                  <span>{notifyStatus.text}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Webhook URL display */}
           <div className="space-y-2">
             <label className="block text-xs font-medium text-slate-300">
@@ -215,7 +386,7 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
             <Info className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />
             <div>
               <strong className="text-white block mb-0.5">Tezkor sinov uchun:</strong>
-              Siz hoziroq pastdagi interaktiv Telegram Simulyatori orqali bot bilan to‘liq suhbatlashishingiz, xarajat kiritishingiz va AI tavsiyalarini olishingiz mumkin!
+              Siz hoziroq "Simulyatorga qaytish" tugmasini bosib, bot bilan to‘liq suhbatlashishingiz, xarajat kiritishingiz va sun'iy intellekt tavsiyalarini sinab ko'rishingiz mumkin!
             </div>
           </div>
         </div>

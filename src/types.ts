@@ -120,4 +120,6 @@ export type ActiveTab =
   | 'ai-advisor' 
   | 'forecast' 
   | 'goals' 
-  | 'telegram';
+  | 'telegram'
+  | 'sheets'
+  | 'risks';
