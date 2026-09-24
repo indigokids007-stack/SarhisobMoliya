@@ -30,7 +30,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Maosh',
     description: 'Asosiy ish joyidan sentyabr oylik maoshi',
     date: '2026-09-05',
+    time: '10:00',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-05T10:00:00.000Z',
   },
   {
     id: 'tx-2',
@@ -39,7 +41,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Freelance',
     description: 'Mobil ilova dizayni uchun qabul qilingan toʻlov',
     date: '2026-09-12',
+    time: '15:45',
     paymentMethod: 'Bank hisob',
+    createdAt: '2026-09-12T15:45:00.000Z',
   },
   {
     id: 'tx-3',
@@ -48,7 +52,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Oziq-ovqat',
     description: "Korzinka supermarketidan oylik oziq-ovqat zaxirasi",
     date: '2026-09-06',
+    time: '18:20',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-06T18:20:00.000Z',
   },
   {
     id: 'tx-4',
@@ -57,7 +63,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Kommunal va Uy',
     description: "Elektr energiyasi va tabiiy gaz to'lovi",
     date: '2026-09-08',
+    time: '11:15',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-08T11:15:00.000Z',
   },
   {
     id: 'tx-5',
@@ -66,7 +74,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: "Transport va Yoqilg'i",
     description: "Yandex Go taksi va metro yo'l haqi",
     date: '2026-09-10',
+    time: '08:40',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-10T08:40:00.000Z',
   },
   {
     id: 'tx-6',
@@ -75,7 +85,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Kafe va Restoran',
     description: "Do'stlar bilan kafeda kechki ovqat",
     date: '2026-09-14',
+    time: '20:10',
     paymentMethod: 'Naqd pul',
+    createdAt: '2026-09-14T20:10:00.000Z',
   },
   {
     id: 'tx-7',
@@ -84,7 +96,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: "Ta'lim",
     description: "Ingliz tili IELTS o'quv kursi to'lovi",
     date: '2026-09-15',
+    time: '14:30',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-15T14:30:00.000Z',
   },
   {
     id: 'tx-8',
@@ -93,7 +107,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: "Sog'liq va Dorixona",
     description: "Vitaminlar va shaxsiy gigiyena vositalari",
     date: '2026-09-18',
+    time: '17:05',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-18T17:05:00.000Z',
   },
   {
     id: 'tx-9',
@@ -102,7 +118,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Oziq-ovqat',
     description: "Chorsu bozoridan yangi meva, go'sht va sabzavotlar",
     date: '2026-09-20',
+    time: '11:50',
     paymentMethod: 'Naqd pul',
+    createdAt: '2026-09-20T11:50:00.000Z',
   },
   {
     id: 'tx-10',
@@ -111,7 +129,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Texnika va Aloqa',
     description: "Uy interneti va mobil aloqa paketi",
     date: '2026-09-21',
+    time: '16:25',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-21T16:25:00.000Z',
   },
   {
     id: 'tx-11',
@@ -120,7 +140,9 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     category: 'Kafe va Restoran',
     description: "Ertalabki qahva va desertlar",
     date: '2026-09-22',
+    time: '09:15',
     paymentMethod: 'Humo/Uzcard',
+    createdAt: '2026-09-22T09:15:00.000Z',
   },
 ];
 

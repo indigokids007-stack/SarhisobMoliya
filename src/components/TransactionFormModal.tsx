@@ -34,6 +34,10 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
   const [category, setCategory] = useState<string>('Oziq-ovqat');
   const [description, setDescription] = useState<string>('');
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [time, setTime] = useState<string>(() => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  });
   const [paymentMethod, setPaymentMethod] = useState<'Humo/Uzcard' | 'Visa/Mastercard' | 'Naqd pul' | 'Bank hisob'>('Humo/Uzcard');
 
   if (!isOpen) return null;
@@ -68,12 +72,14 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
 
   const handleConfirmAiParsed = () => {
     if (!parsedPreview) return;
+    const nowTime = new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false });
     onAddTransaction({
       type: parsedPreview.type,
       amount: parsedPreview.amount,
       category: parsedPreview.category,
       description: parsedPreview.description || aiText,
       date: parsedPreview.date || new Date().toISOString().split('T')[0],
+      time: nowTime,
       paymentMethod: 'Humo/Uzcard',
     });
     resetAndClose();
@@ -97,6 +103,7 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
       category,
       description: description.trim(),
       date,
+      time: time || '12:00',
       paymentMethod,
     });
     resetAndClose();
@@ -351,8 +358,8 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
                 />
               </div>
 
-              {/* Date & Payment method */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Date, Time & Payment method */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1">
                     Sana:
@@ -362,6 +369,17 @@ export const TransactionFormModal: React.FC<TransactionFormModalProps> = ({
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
+                    Vaqti:
+                  </label>
+                  <input
+                    type="time"
+                    value={time}
+                    onChange={(e) => setTime(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                   />
                 </div>
                 <div>

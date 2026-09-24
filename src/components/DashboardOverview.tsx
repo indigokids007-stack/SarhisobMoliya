@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Transaction, RecurringBill, SavingsGoal, ActiveTab } from '../types';
 import { formatUZS, formatDateUz, formatShortUZS } from '../utils/formatters';
+import { getTransactionTimeString } from '../utils/csvExport';
 
 interface DashboardOverviewProps {
   transactions: Transaction[];
@@ -342,6 +343,8 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                       <span>{tx.category}</span>
                       <span>·</span>
                       <span>{formatDateUz(tx.date)}</span>
+                      <span>·</span>
+                      <span className="font-mono text-amber-400/90">{getTransactionTimeString(tx)}</span>
                     </div>
                   </div>
                 </div>

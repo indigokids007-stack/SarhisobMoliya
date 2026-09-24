@@ -7,6 +7,7 @@ export interface Transaction {
   category: string;
   description: string;
   date: string; // YYYY-MM-DD
+  time?: string; // HH:mm (e.g. 14:30)
   paymentMethod?: 'Humo/Uzcard' | 'Visa/Mastercard' | 'Naqd pul' | 'Bank hisob';
   createdAt?: string;
 }

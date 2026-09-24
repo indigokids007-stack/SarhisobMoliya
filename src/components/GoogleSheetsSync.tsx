@@ -6,6 +6,7 @@ import {
   syncToExistingSheet, 
   GoogleSheetMetadata 
 } from '../services/googleSheets';
+import { getTransactionTimeString } from '../utils/csvExport';
 import { 
   FileSpreadsheet, 
   ExternalLink, 
@@ -327,7 +328,7 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
               <h3 className="text-sm font-semibold text-slate-200">
                 Google Sheets uchun tayyorlangan jadval namunalari
               </h3>
-              <p className="text-xs text-slate-500">Ushbu ustunlar to'g'ridan-to'g'ri jadvalingizga yoziladi</p>
+              <p className="text-xs text-slate-500">Har bir xarajat va daromad alohida Sana va Vaqt (Soat) ustunlari bilan jadvalga yoziladi</p>
             </div>
           </div>
           <span className="text-xs text-slate-400 font-mono">
@@ -339,7 +340,8 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
           <table className="w-full text-left text-xs text-slate-300">
             <thead className="bg-slate-950/60 text-slate-400 uppercase font-semibold border-b border-slate-800">
               <tr>
-                <th className="px-4 py-3">Sana</th>
+                <th className="px-4 py-3">Kuni (Sana)</th>
+                <th className="px-4 py-3">Vaqti</th>
                 <th className="px-4 py-3">Turi</th>
                 <th className="px-4 py-3">Toifa</th>
                 <th className="px-4 py-3">Miqdor</th>
@@ -350,7 +352,8 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
             <tbody className="divide-y divide-slate-800/60">
               {transactions.slice(0, 5).map((t) => (
                 <tr key={t.id} className="hover:bg-slate-800/30 transition-colors">
-                  <td className="px-4 py-3 font-mono text-slate-400">{t.date}</td>
+                  <td className="px-4 py-3 font-mono text-slate-300">{t.date}</td>
+                  <td className="px-4 py-3 font-mono text-amber-300">{getTransactionTimeString(t)}</td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${

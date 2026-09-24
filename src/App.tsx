@@ -154,6 +154,7 @@ export default function App() {
       ...newTx,
       id: `tx-${Date.now()}`,
       createdAt: new Date().toISOString(),
+      time: newTx.time || new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false }),
     };
     setTransactions((prev) => [tx, ...prev]);
   };

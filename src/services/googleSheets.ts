@@ -1,5 +1,5 @@
 import { Transaction, RecurringBill, SavingsGoal } from '../types';
-import { formatUZS } from '../utils/formatters';
+import { getTransactionTimeString } from '../utils/csvExport';
 
 export interface GoogleSheetMetadata {
   spreadsheetId: string;
@@ -10,7 +10,8 @@ export interface GoogleSheetMetadata {
 }
 
 /**
- * Creates a dedicated "Sarhisob Moliya" Google Sheet and populates it with headers and data
+ * Creates a dedicated "Sarhisob Moliya" Google Sheet and populates it with headers and data.
+ * Every transaction strictly includes both Date (Kuni) and Time (Vaqti) columns.
  */
 export async function createAndPopulateSpreadsheet(
   accessToken: string,
@@ -35,7 +36,7 @@ export async function createAndPopulateSpreadsheet(
         {
           properties: {
             title: 'Tranzaksiyalar',
-            gridProperties: { rowCount: 1000, columnCount: 6, frozenRowCount: 1 },
+            gridProperties: { rowCount: 1000, columnCount: 8, frozenRowCount: 1 },
           },
         },
         {
@@ -57,22 +58,24 @@ export async function createAndPopulateSpreadsheet(
   const spreadsheetId = sheetData.spreadsheetId;
   const spreadsheetUrl = sheetData.spreadsheetUrl;
 
-  // 2. Prepare transaction rows
+  // 2. Prepare transaction rows with both Date AND Time clearly visible
   const transactionRows = [
-    ['Sana', 'Turi', 'Toifa', "Miqdor (so'm)", 'Izoh', 'ID'],
+    ['Kuni (Sana)', 'Vaqti (Soat)', 'Turi', 'Toifa', "Miqdor (so'm)", 'Izoh', "To'lov usuli", 'ID'],
     ...transactions.map((t) => [
       t.date,
-      t.type === 'income' ? 'Kirim' : 'Chiqim',
+      getTransactionTimeString(t),
+      t.type === 'income' ? 'Kirim (+)' : 'Chiqim (-)',
       t.category,
       t.amount,
       t.description || '',
+      t.paymentMethod || 'Humo/Uzcard',
       t.id,
     ]),
   ];
 
-  // 3. Write Transactions
+  // 3. Write Transactions (Columns A to H)
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:F${transactionRows.length}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:H${transactionRows.length}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -96,10 +99,10 @@ export async function createAndPopulateSpreadsheet(
   const summaryRows = [
     ["Ko'rsatkich", 'Qiymat', 'Qo\'shimcha ma\'lumot'],
     ['Joriy Balans', balance, "So'nggi yangilanish vaqti: " + new Date().toLocaleString('uz-UZ')],
-    ['Jami Daromad', totalIncome, 'Tranzaksiyalar bo\'yicha'],
-    ['Jami Xarajat', totalExpense, 'Tranzaksiyalar bo\'yicha'],
-    ['Sof Jamg\'arma', totalIncome - totalExpense, 'Kirim - Chiqim'],
-    ['Doimiy Majburiyatlar soni', recurringBills.length, 'Oylik doimiy to\'lovlar'],
+    ['Jami Daromad', totalIncome, 'Tranzaksiyalar bo\'yicha jami kirim'],
+    ['Jami Xarajat', totalExpense, 'Tranzaksiyalar bo\'yicha jami chiqim'],
+    ['Sof Jamg\'arma (Kirim - Chiqim)', totalIncome - totalExpense, 'Sof qoldiq'],
+    ['Doimiy Majburiyatlar soni', recurringBills.length, 'Oylik to\'lovlar'],
     ['Jamg\'arma Maqsadlari soni', goals.length, 'Faol maqsadlar'],
   ];
 
@@ -127,7 +130,7 @@ export async function createAndPopulateSpreadsheet(
 }
 
 /**
- * Appends a single new transaction into an existing Google Sheet
+ * Appends a single new transaction into an existing Google Sheet with Date AND Time
  */
 export async function appendTransactionToSheet(
   accessToken: string,
@@ -136,10 +139,12 @@ export async function appendTransactionToSheet(
 ): Promise<boolean> {
   const row = [
     transaction.date,
-    transaction.type === 'income' ? 'Kirim' : 'Chiqim',
+    getTransactionTimeString(transaction),
+    transaction.type === 'income' ? 'Kirim (+)' : 'Chiqim (-)',
     transaction.category,
     transaction.amount,
     transaction.description || '',
+    transaction.paymentMethod || 'Humo/Uzcard',
     transaction.id,
   ];
 
@@ -161,7 +166,7 @@ export async function appendTransactionToSheet(
 }
 
 /**
- * Syncs full data to an existing Google Sheet (re-writes sheets)
+ * Syncs full data to an existing Google Sheet (re-writes sheets with Date and Time columns)
  */
 export async function syncToExistingSheet(
   accessToken: string,
@@ -171,21 +176,23 @@ export async function syncToExistingSheet(
   goals: SavingsGoal[],
   balance: number
 ): Promise<boolean> {
-  // Clear and rewrite Tranzaksiyalar
+  // Clear and rewrite Tranzaksiyalar (Columns A through H)
   const transactionRows = [
-    ['Sana', 'Turi', 'Toifa', "Miqdor (so'm)", 'Izoh', 'ID'],
+    ['Kuni (Sana)', 'Vaqti (Soat)', 'Turi', 'Toifa', "Miqdor (so'm)", 'Izoh', "To'lov usuli", 'ID'],
     ...transactions.map((t) => [
       t.date,
-      t.type === 'income' ? 'Kirim' : 'Chiqim',
+      getTransactionTimeString(t),
+      t.type === 'income' ? 'Kirim (+)' : 'Chiqim (-)',
       t.category,
       t.amount,
       t.description || '',
+      t.paymentMethod || 'Humo/Uzcard',
       t.id,
     ]),
   ];
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:F${Math.max(transactionRows.length + 10, 50)}:clear`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:H${Math.max(transactionRows.length + 20, 100)}:clear`,
     {
       method: 'POST',
       headers: {
@@ -196,7 +203,7 @@ export async function syncToExistingSheet(
   );
 
   const res1 = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:F${transactionRows.length}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:H${transactionRows.length}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -205,6 +212,38 @@ export async function syncToExistingSheet(
       },
       body: JSON.stringify({
         values: transactionRows,
+      }),
+    }
+  );
+
+  // Update summary sheet as well
+  const totalIncome = transactions
+    .filter((t) => t.type === 'income')
+    .reduce((s, t) => s + t.amount, 0);
+  const totalExpense = transactions
+    .filter((t) => t.type === 'expense')
+    .reduce((s, t) => s + t.amount, 0);
+
+  const summaryRows = [
+    ["Ko'rsatkich", 'Qiymat', 'Qo\'shimcha ma\'lumot'],
+    ['Joriy Balans', balance, "So'nggi yangilanish vaqti: " + new Date().toLocaleString('uz-UZ')],
+    ['Jami Daromad', totalIncome, 'Tranzaksiyalar bo\'yicha jami kirim'],
+    ['Jami Xarajat', totalExpense, 'Tranzaksiyalar bo\'yicha jami chiqim'],
+    ['Sof Jamg\'arma (Kirim - Chiqim)', totalIncome - totalExpense, 'Sof qoldiq'],
+    ['Doimiy Majburiyatlar soni', recurringBills.length, 'Oylik to\'lovlar'],
+    ['Jamg\'arma Maqsadlari soni', goals.length, 'Faol maqsadlar'],
+  ];
+
+  await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Umumiy Xulosa'!A1:C${summaryRows.length}?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        values: summaryRows,
       }),
     }
   );

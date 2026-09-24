@@ -67,7 +67,7 @@ export const Header: React.FC<HeaderProps> = ({
         </span>
       ) : null
     },
-    { id: 'telegram', label: 'Telegram Bot', icon: <Send className="w-4 h-4 text-sky-400" /> },
+    { id: 'telegram', label: 'Telegram & Mini App', icon: <Send className="w-4 h-4 text-sky-400" /> },
   ];
 
   return (
@@ -88,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                AI moliyaviy tahlilchi · Telegram bot · Google Sheets · Android APK
+                AI moliyaviy tahlilchi · Telegram Mini App · Google Sheets · Android APK
               </p>
             </div>
           </div>
