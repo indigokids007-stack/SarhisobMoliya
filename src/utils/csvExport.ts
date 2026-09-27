@@ -30,10 +30,11 @@ function escapeCSVField(value: any): string {
 
 /**
  * Exports transactions to CSV file with UTF-8 BOM
+ * Structure: Tovar nomi, Miqdori, Summasi, Vaqti, Kuni, Kim kiritdi (Users)
  */
 export function exportTransactionsToCSV(
   transactions: Transaction[],
-  filenamePrefix = 'sarhisob_hisobot'
+  filenamePrefix = 'sarhisob_tovarlar_hisobot'
 ): { success: boolean; filename: string; count: number } {
   if (!transactions || transactions.length === 0) {
     return { success: false, filename: '', count: 0 };
@@ -41,13 +42,15 @@ export function exportTransactionsToCSV(
 
   const headers = [
     '№',
-    'Kuni (Sana)',
+    'Tovar nomi',
+    'Miqdori',
+    "Summasi (so'm)",
     'Vaqti (Soat)',
+    'Kuni (Sana)',
     'Turi',
     'Toifa',
-    'Tavsif / Izoh',
-    "Miqdor (so'm)",
-    "To'lov usuli",
+    'Kim kiritdi (Foydalanuvchi)',
+    'Foydalanuvchi Emaili',
     'Tranzaksiya ID'
   ];
 
@@ -60,13 +63,15 @@ export function exportTransactionsToCSV(
 
     return [
       escapeCSVField(index + 1),
-      escapeCSVField(tx.date),
+      escapeCSVField(tx.itemName || tx.description),
+      escapeCSVField(tx.quantity || '1 dona'),
+      escapeCSVField(tx.amount),
       escapeCSVField(getTransactionTimeString(tx)),
+      escapeCSVField(tx.date),
       escapeCSVField(tx.type === 'income' ? 'Kirim (+)' : 'Chiqim (-)'),
       escapeCSVField(tx.category),
-      escapeCSVField(tx.description),
-      escapeCSVField(tx.amount),
-      escapeCSVField(tx.paymentMethod || 'Humo/Uzcard'),
+      escapeCSVField(tx.createdBy?.name || 'Mehmon foydalanuvchi'),
+      escapeCSVField(tx.createdBy?.email || '-'),
       escapeCSVField(tx.id),
     ].join(',');
   });
@@ -82,40 +87,48 @@ export function exportTransactionsToCSV(
     escapeCSVField('---'),
     escapeCSVField('---'),
     escapeCSVField('---'),
+    escapeCSVField('---'),
+    escapeCSVField('---'),
   ].join(',');
 
   const incomeSummaryRow = [
     escapeCSVField(''),
-    escapeCSVField('JAMI KIRIM'),
+    escapeCSVField('JAMI KIRIM SUMMASI'),
+    escapeCSVField(''),
+    escapeCSVField(totalIncome),
+    escapeCSVField(''),
     escapeCSVField(''),
     escapeCSVField('Kirim'),
     escapeCSVField('Barcha toifalar'),
-    escapeCSVField('Jami tushumlar yig‘indisi'),
-    escapeCSVField(totalIncome),
+    escapeCSVField('Barcha foydalanuvchilar jamlanmasi'),
     escapeCSVField(''),
     escapeCSVField(''),
   ].join(',');
 
   const expenseSummaryRow = [
     escapeCSVField(''),
-    escapeCSVField('JAMI CHIQIM'),
+    escapeCSVField('JAMI CHIQIM SUMMASI'),
+    escapeCSVField(''),
+    escapeCSVField(totalExpense),
+    escapeCSVField(''),
     escapeCSVField(''),
     escapeCSVField('Chiqim'),
     escapeCSVField('Barcha toifalar'),
-    escapeCSVField('Jami xarajatlar yig‘indisi'),
-    escapeCSVField(totalExpense),
+    escapeCSVField('Barcha foydalanuvchilar jamlanmasi'),
     escapeCSVField(''),
     escapeCSVField(''),
   ].join(',');
 
   const netBalanceRow = [
     escapeCSVField(''),
-    escapeCSVField('SOF FARQ (KIRIM - CHIQIM)'),
+    escapeCSVField('SOF SALDO (KIRIM - CHIQIM)'),
     escapeCSVField(''),
-    escapeCSVField(totalIncome - totalExpense >= 0 ? 'Foyda' : 'Zarar'),
+    escapeCSVField(totalIncome - totalExpense),
+    escapeCSVField(''),
+    escapeCSVField(''),
+    escapeCSVField(totalIncome - totalExpense >= 0 ? 'Foyda / Qoldiq' : 'Zarar'),
     escapeCSVField('Yakuniy saldo'),
     escapeCSVField('Kirimdan chiqim ayirilgan'),
-    escapeCSVField(totalIncome - totalExpense),
     escapeCSVField(''),
     escapeCSVField(''),
   ].join(',');

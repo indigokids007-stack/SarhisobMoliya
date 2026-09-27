@@ -340,20 +340,35 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
           <table className="w-full text-left text-xs text-slate-300">
             <thead className="bg-slate-950/60 text-slate-400 uppercase font-semibold border-b border-slate-800">
               <tr>
-                <th className="px-4 py-3">Kuni (Sana)</th>
+                <th className="px-4 py-3">Tovar nomi</th>
+                <th className="px-4 py-3">Miqdori</th>
+                <th className="px-4 py-3">Summasi</th>
                 <th className="px-4 py-3">Vaqti</th>
+                <th className="px-4 py-3">Kuni</th>
+                <th className="px-4 py-3">Kim kiritdi</th>
                 <th className="px-4 py-3">Turi</th>
-                <th className="px-4 py-3">Toifa</th>
-                <th className="px-4 py-3">Miqdor</th>
-                <th className="px-4 py-3">Izoh</th>
                 <th className="px-4 py-3 text-right">Holat</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
               {transactions.slice(0, 5).map((t) => (
                 <tr key={t.id} className="hover:bg-slate-800/30 transition-colors">
-                  <td className="px-4 py-3 font-mono text-slate-300">{t.date}</td>
+                  <td className="px-4 py-3 font-semibold text-white">
+                    {t.itemName || t.description}
+                  </td>
+                  <td className="px-4 py-3 font-mono text-emerald-400 font-medium">
+                    {t.quantity || '1 dona'}
+                  </td>
+                  <td className="px-4 py-3 font-bold font-mono text-slate-100">
+                    <span className={t.type === 'income' ? 'text-emerald-400' : 'text-rose-400'}>
+                      {t.type === 'income' ? '+' : '-'}{formatUZS(t.amount)}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 font-mono text-amber-300">{getTransactionTimeString(t)}</td>
+                  <td className="px-4 py-3 font-mono text-slate-400">{t.date}</td>
+                  <td className="px-4 py-3 text-indigo-300 font-medium">
+                    {t.createdBy?.name || 'Mehmon'}
+                  </td>
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${
@@ -365,15 +380,10 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
                       {t.type === 'income' ? 'Kirim' : 'Chiqim'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 font-medium text-slate-200">{t.category}</td>
-                  <td className="px-4 py-3 font-semibold text-slate-100">
-                    {formatUZS(t.amount)}
-                  </td>
-                  <td className="px-4 py-3 text-slate-400 truncate max-w-xs">{t.description || '-'}</td>
                   <td className="px-4 py-3 text-right">
                     <span className="inline-flex items-center space-x-1 text-emerald-400 text-[10px]">
                       <CheckCircle2 className="w-3 h-3" />
-                      <span>Sinxronlashga tayyor</span>
+                      <span>Tayyor</span>
                     </span>
                   </td>
                 </tr>

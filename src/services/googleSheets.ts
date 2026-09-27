@@ -11,7 +11,7 @@ export interface GoogleSheetMetadata {
 
 /**
  * Creates a dedicated "Sarhisob Moliya" Google Sheet and populates it with headers and data.
- * Every transaction strictly includes both Date (Kuni) and Time (Vaqti) columns.
+ * Structure: Tovar nomi, Miqdori, Summasi, Vaqti, Kuni, Kim kiritdi (Users) va Jamlangan xulosa.
  */
 export async function createAndPopulateSpreadsheet(
   accessToken: string,
@@ -30,19 +30,19 @@ export async function createAndPopulateSpreadsheet(
     },
     body: JSON.stringify({
       properties: {
-        title: title || `Sarhisob Moliya Hisoboti - ${new Date().toLocaleDateString('uz-UZ')}`,
+        title: title || `Sarhisob Moliya & Tovar Hisoboti - ${new Date().toLocaleDateString('uz-UZ')}`,
       },
       sheets: [
         {
           properties: {
-            title: 'Tranzaksiyalar',
-            gridProperties: { rowCount: 1000, columnCount: 8, frozenRowCount: 1 },
+            title: 'Tovarlar va Amaliyotlar',
+            gridProperties: { rowCount: 1000, columnCount: 11, frozenRowCount: 1 },
           },
         },
         {
           properties: {
-            title: 'Umumiy Xulosa',
-            gridProperties: { rowCount: 100, columnCount: 4, frozenRowCount: 1 },
+            title: 'Jamlangan Xulosa va Users',
+            gridProperties: { rowCount: 100, columnCount: 6, frozenRowCount: 1 },
           },
         },
       ],
@@ -58,24 +58,39 @@ export async function createAndPopulateSpreadsheet(
   const spreadsheetId = sheetData.spreadsheetId;
   const spreadsheetUrl = sheetData.spreadsheetUrl;
 
-  // 2. Prepare transaction rows with both Date AND Time clearly visible
+  // 2. Prepare transaction rows with Tovar nomi, Miqdori, Summasi, Vaqti, Kim kiritdi
   const transactionRows = [
-    ['Kuni (Sana)', 'Vaqti (Soat)', 'Turi', 'Toifa', "Miqdor (so'm)", 'Izoh', "To'lov usuli", 'ID'],
-    ...transactions.map((t) => [
-      t.date,
+    [
+      '№',
+      'Tovar nomi',
+      'Miqdori',
+      "Summasi (so'm)",
+      'Vaqti (Soat)',
+      'Kuni (Sana)',
+      'Turi',
+      'Toifa',
+      'Kim kiritdi (Foydalanuvchi)',
+      'Foydalanuvchi Emaili',
+      'Tranzaksiya ID'
+    ],
+    ...transactions.map((t, index) => [
+      index + 1,
+      t.itemName || t.description,
+      t.quantity || '1 dona',
+      t.amount,
       getTransactionTimeString(t),
+      t.date,
       t.type === 'income' ? 'Kirim (+)' : 'Chiqim (-)',
       t.category,
-      t.amount,
-      t.description || '',
-      t.paymentMethod || 'Humo/Uzcard',
+      t.createdBy?.name || 'Mehmon foydalanuvchi',
+      t.createdBy?.email || '-',
       t.id,
     ]),
   ];
 
-  // 3. Write Transactions (Columns A to H)
+  // 3. Write Transactions to 'Tovarlar va Amaliyotlar' (Columns A to K)
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:H${transactionRows.length}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Tovarlar va Amaliyotlar'!A1:K${transactionRows.length}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -88,7 +103,7 @@ export async function createAndPopulateSpreadsheet(
     }
   );
 
-  // 4. Summary rows
+  // 4. Calculate Aggregate Summary by Users
   const totalIncome = transactions
     .filter((t) => t.type === 'income')
     .reduce((s, t) => s + t.amount, 0);
@@ -96,18 +111,44 @@ export async function createAndPopulateSpreadsheet(
     .filter((t) => t.type === 'expense')
     .reduce((s, t) => s + t.amount, 0);
 
+  // Group by users
+  const userStats: Record<string, { name: string; email: string; count: number; income: number; expense: number }> = {};
+  transactions.forEach((tx) => {
+    const email = tx.createdBy?.email || 'Noma\'lum';
+    const name = tx.createdBy?.name || 'Mehmon';
+    if (!userStats[email]) {
+      userStats[email] = { name, email, count: 0, income: 0, expense: 0 };
+    }
+    userStats[email].count += 1;
+    if (tx.type === 'income') userStats[email].income += tx.amount;
+    else userStats[email].expense += tx.amount;
+  });
+
   const summaryRows = [
-    ["Ko'rsatkich", 'Qiymat', 'Qo\'shimcha ma\'lumot'],
-    ['Joriy Balans', balance, "So'nggi yangilanish vaqti: " + new Date().toLocaleString('uz-UZ')],
-    ['Jami Daromad', totalIncome, 'Tranzaksiyalar bo\'yicha jami kirim'],
-    ['Jami Xarajat', totalExpense, 'Tranzaksiyalar bo\'yicha jami chiqim'],
-    ['Sof Jamg\'arma (Kirim - Chiqim)', totalIncome - totalExpense, 'Sof qoldiq'],
-    ['Doimiy Majburiyatlar soni', recurringBills.length, 'Oylik to\'lovlar'],
+    ["UMUMIY MOLIYAVIY JAMLANMA", '', ''],
+    ["Ko'rsatkich", 'Qiymat', 'Izoh'],
+    ['Joriy Balans', balance, "So'nggi sinxronlash: " + new Date().toLocaleString('uz-UZ')],
+    ['Jami Kirim Summasi', totalIncome, 'Barcha tushumlar jamlanmasi'],
+    ['Jami Chiqim Summasi', totalExpense, 'Barcha xarajatlar jamlanmasi'],
+    ['Sof Saldo (Kirim - Chiqim)', totalIncome - totalExpense, 'Sof qoldiq'],
+    ['Jami Amaliyotlar va Tovarlar soni', transactions.length, 'Daftardagi jami yozuvlar'],
+    ['Doimiy Majburiyatlar soni', recurringBills.length, 'Oylik doimiy to\'lovlar'],
     ['Jamg\'arma Maqsadlari soni', goals.length, 'Faol maqsadlar'],
+    ['', '', ''],
+    ["FOYDALANUVCHILAR (USERS) BO'YICHA JAMLANMA HISOBOT", '', ''],
+    ['Foydalanuvchi Nomi', 'Email', 'Kiritgan tovarlar soni', 'Kiritgan Kirim (so\'m)', 'Kiritgan Chiqim (so\'m)', 'Sof hissasi'],
+    ...Object.values(userStats).map((u) => [
+      u.name,
+      u.email,
+      u.count,
+      u.income,
+      u.expense,
+      u.income - u.expense,
+    ]),
   ];
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Umumiy Xulosa'!A1:C${summaryRows.length}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Jamlangan Xulosa va Users'!A1:F${summaryRows.length}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -130,26 +171,30 @@ export async function createAndPopulateSpreadsheet(
 }
 
 /**
- * Appends a single new transaction into an existing Google Sheet with Date AND Time
+ * Appends a single new transaction into an existing Google Sheet
  */
 export async function appendTransactionToSheet(
   accessToken: string,
   spreadsheetId: string,
-  transaction: Transaction
+  transaction: Transaction,
+  nextIndex = 1
 ): Promise<boolean> {
   const row = [
-    transaction.date,
+    nextIndex,
+    transaction.itemName || transaction.description,
+    transaction.quantity || '1 dona',
+    transaction.amount,
     getTransactionTimeString(transaction),
+    transaction.date,
     transaction.type === 'income' ? 'Kirim (+)' : 'Chiqim (-)',
     transaction.category,
-    transaction.amount,
-    transaction.description || '',
-    transaction.paymentMethod || 'Humo/Uzcard',
+    transaction.createdBy?.name || 'Mehmon foydalanuvchi',
+    transaction.createdBy?.email || '-',
     transaction.id,
   ];
 
   const response = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Tovarlar va Amaliyotlar'!A1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
     {
       method: 'POST',
       headers: {
@@ -166,7 +211,7 @@ export async function appendTransactionToSheet(
 }
 
 /**
- * Syncs full data to an existing Google Sheet (re-writes sheets with Date and Time columns)
+ * Syncs full data to an existing Google Sheet (re-writes sheets with Tovar, Users & Summary)
  */
 export async function syncToExistingSheet(
   accessToken: string,
@@ -176,23 +221,38 @@ export async function syncToExistingSheet(
   goals: SavingsGoal[],
   balance: number
 ): Promise<boolean> {
-  // Clear and rewrite Tranzaksiyalar (Columns A through H)
+  // Clear and rewrite 'Tovarlar va Amaliyotlar' (Columns A through K)
   const transactionRows = [
-    ['Kuni (Sana)', 'Vaqti (Soat)', 'Turi', 'Toifa', "Miqdor (so'm)", 'Izoh', "To'lov usuli", 'ID'],
-    ...transactions.map((t) => [
-      t.date,
+    [
+      '№',
+      'Tovar nomi',
+      'Miqdori',
+      "Summasi (so'm)",
+      'Vaqti (Soat)',
+      'Kuni (Sana)',
+      'Turi',
+      'Toifa',
+      'Kim kiritdi (Foydalanuvchi)',
+      'Foydalanuvchi Emaili',
+      'Tranzaksiya ID'
+    ],
+    ...transactions.map((t, index) => [
+      index + 1,
+      t.itemName || t.description,
+      t.quantity || '1 dona',
+      t.amount,
       getTransactionTimeString(t),
+      t.date,
       t.type === 'income' ? 'Kirim (+)' : 'Chiqim (-)',
       t.category,
-      t.amount,
-      t.description || '',
-      t.paymentMethod || 'Humo/Uzcard',
+      t.createdBy?.name || 'Mehmon foydalanuvchi',
+      t.createdBy?.email || '-',
       t.id,
     ]),
   ];
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:H${Math.max(transactionRows.length + 20, 100)}:clear`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Tovarlar va Amaliyotlar'!A1:K${Math.max(transactionRows.length + 20, 100)}:clear`,
     {
       method: 'POST',
       headers: {
@@ -203,7 +263,7 @@ export async function syncToExistingSheet(
   );
 
   const res1 = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Tranzaksiyalar!A1:H${transactionRows.length}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Tovarlar va Amaliyotlar'!A1:K${transactionRows.length}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -224,18 +284,43 @@ export async function syncToExistingSheet(
     .filter((t) => t.type === 'expense')
     .reduce((s, t) => s + t.amount, 0);
 
+  const userStats: Record<string, { name: string; email: string; count: number; income: number; expense: number }> = {};
+  transactions.forEach((tx) => {
+    const email = tx.createdBy?.email || 'Noma\'lum';
+    const name = tx.createdBy?.name || 'Mehmon';
+    if (!userStats[email]) {
+      userStats[email] = { name, email, count: 0, income: 0, expense: 0 };
+    }
+    userStats[email].count += 1;
+    if (tx.type === 'income') userStats[email].income += tx.amount;
+    else userStats[email].expense += tx.amount;
+  });
+
   const summaryRows = [
-    ["Ko'rsatkich", 'Qiymat', 'Qo\'shimcha ma\'lumot'],
-    ['Joriy Balans', balance, "So'nggi yangilanish vaqti: " + new Date().toLocaleString('uz-UZ')],
-    ['Jami Daromad', totalIncome, 'Tranzaksiyalar bo\'yicha jami kirim'],
-    ['Jami Xarajat', totalExpense, 'Tranzaksiyalar bo\'yicha jami chiqim'],
-    ['Sof Jamg\'arma (Kirim - Chiqim)', totalIncome - totalExpense, 'Sof qoldiq'],
-    ['Doimiy Majburiyatlar soni', recurringBills.length, 'Oylik to\'lovlar'],
+    ["UMUMIY MOLIYAVIY JAMLANMA", '', ''],
+    ["Ko'rsatkich", 'Qiymat', 'Izoh'],
+    ['Joriy Balans', balance, "So'nggi sinxronlash: " + new Date().toLocaleString('uz-UZ')],
+    ['Jami Kirim Summasi', totalIncome, 'Barcha tushumlar jamlanmasi'],
+    ['Jami Chiqim Summasi', totalExpense, 'Barcha xarajatlar jamlanmasi'],
+    ['Sof Saldo (Kirim - Chiqim)', totalIncome - totalExpense, 'Sof qoldiq'],
+    ['Jami Amaliyotlar va Tovarlar soni', transactions.length, 'Daftardagi jami yozuvlar'],
+    ['Doimiy Majburiyatlar soni', recurringBills.length, 'Oylik doimiy to\'lovlar'],
     ['Jamg\'arma Maqsadlari soni', goals.length, 'Faol maqsadlar'],
+    ['', '', ''],
+    ["FOYDALANUVCHILAR (USERS) BO'YICHA JAMLANMA HISOBOT", '', ''],
+    ['Foydalanuvchi Nomi', 'Email', 'Kiritgan tovarlar soni', 'Kiritgan Kirim (so\'m)', 'Kiritgan Chiqim (so\'m)', 'Sof hissasi'],
+    ...Object.values(userStats).map((u) => [
+      u.name,
+      u.email,
+      u.count,
+      u.income,
+      u.expense,
+      u.income - u.expense,
+    ]),
   ];
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Umumiy Xulosa'!A1:C${summaryRows.length}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'Jamlangan Xulosa va Users'!A1:F${summaryRows.length}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {

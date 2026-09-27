@@ -12,12 +12,13 @@ import {
   Wallet,
   FileSpreadsheet,
   AlertOctagon,
-  Smartphone,
   Server,
   User as UserIcon,
-  ShieldCheck
+  ShieldCheck,
+  Users,
+  Package
 } from 'lucide-react';
-import { ActiveTab } from '../types';
+import { ActiveTab, ADMIN_EMAIL } from '../types';
 import { formatUZS } from '../utils/formatters';
 
 interface HeaderProps {
@@ -28,7 +29,6 @@ interface HeaderProps {
   onOpenTelegram: () => void;
   currentUser: User | null;
   onOpenAuth: () => void;
-  onOpenAndroidApk: () => void;
   onOpenVPSModal: () => void;
   criticalIssuesCount?: number;
 }
@@ -41,10 +41,11 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenTelegram,
   currentUser,
   onOpenAuth,
-  onOpenAndroidApk,
   onOpenVPSModal,
   criticalIssuesCount = 0,
 }) => {
+  const isAdmin = currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
   const navItems: { 
     id: ActiveTab; 
     label: string; 
@@ -52,11 +53,22 @@ export const Header: React.FC<HeaderProps> = ({
     badge?: React.ReactNode 
   }[] = [
     { id: 'overview', label: 'Umumiy holat', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { id: 'transactions', label: 'Kirim-Chiqimlar', icon: <Receipt className="w-4 h-4" /> },
-    { id: 'ai-advisor', label: 'AI Maslahatchi & Tejash', icon: <Sparkles className="w-4 h-4 text-emerald-400" /> },
+    { id: 'transactions', label: 'Tovarlar & Amaliyotlar', icon: <Package className="w-4 h-4 text-emerald-400" /> },
+    { id: 'users', label: 'Foydalanuvchilar (Users)', icon: <Users className="w-4 h-4 text-indigo-400" /> },
+    { 
+      id: 'admin', 
+      label: 'Admin Panel', 
+      icon: <ShieldCheck className="w-4 h-4 text-amber-400" />,
+      badge: isAdmin ? (
+        <span className="ml-1 px-1.5 py-0.2 text-[9px] bg-amber-500/20 text-amber-300 font-bold rounded">
+          SuperAdmin
+        </span>
+      ) : null
+    },
+    { id: 'sheets', label: 'Google Sheets', icon: <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> },
+    { id: 'ai-advisor', label: 'AI Maslahatchi', icon: <Sparkles className="w-4 h-4 text-emerald-400" /> },
     { id: 'forecast', label: 'Xarajatlar Prognozi', icon: <TrendingUp className="w-4 h-4" /> },
     { id: 'goals', label: 'Maqsadlar & To‘lovlar', icon: <Target className="w-4 h-4" /> },
-    { id: 'sheets', label: 'Google Sheets', icon: <FileSpreadsheet className="w-4 h-4 text-emerald-400" /> },
     { 
       id: 'risks', 
       label: 'Xatolar & Xatarlar', 
@@ -86,9 +98,14 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="text-[10px] font-bold tracking-wider uppercase text-emerald-400 bg-emerald-950/70 border border-emerald-800/80 px-1.5 py-0.5 rounded">
                   Pro Moliya
                 </span>
+                {isAdmin && (
+                  <span className="text-[9px] font-bold tracking-wider uppercase text-amber-300 bg-amber-950/70 border border-amber-800/80 px-1.5 py-0.5 rounded">
+                    Admin
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                AI moliyaviy tahlilchi · Telegram Mini App · Google Sheets · Android APK
+                Tovarlar hisobi · Google Sheets · Users · Telegram Mini App
               </p>
             </div>
           </div>
@@ -102,16 +119,6 @@ export const Header: React.FC<HeaderProps> = ({
                 {formatUZS(balance)}
               </span>
             </div>
-
-            {/* Android APK Button */}
-            <button
-              onClick={onOpenAndroidApk}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold text-emerald-300 bg-emerald-950/50 hover:bg-emerald-900/50 border border-emerald-800/60 rounded-xl transition-all shadow-sm"
-              title="Android APK va PWA o'rnatish markazi"
-            >
-              <Smartphone className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">Android APK</span>
-            </button>
 
             {/* VPS Deployment Button */}
             <button
@@ -129,30 +136,41 @@ export const Header: React.FC<HeaderProps> = ({
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all shadow-md shadow-emerald-900/20 active:scale-95"
             >
               <PlusCircle className="w-4 h-4" />
-              <span className="hidden sm:inline">Kirim / Chiqim</span>
+              <span className="hidden sm:inline">+ Yangi Tovar</span>
             </button>
 
             {/* User Profile / Login Button */}
             {currentUser ? (
               <button
                 onClick={onOpenAuth}
-                className="flex items-center gap-2 p-1 pl-2 bg-slate-800 hover:bg-slate-750 border border-slate-700 rounded-xl transition-all"
-                title="Profil va Google hisob"
+                className={`flex items-center gap-2 p-1 pl-2 rounded-xl transition-all border ${
+                  isAdmin 
+                    ? 'bg-amber-950/40 border-amber-500/40 hover:bg-amber-900/40' 
+                    : 'bg-slate-800 hover:bg-slate-750 border-slate-700'
+                }`}
+                title={`Profil: ${currentUser.email}`}
               >
                 {currentUser.photoURL ? (
                   <img
                     src={currentUser.photoURL}
                     alt={currentUser.displayName || 'User'}
-                    className="w-7 h-7 rounded-full ring-1 ring-emerald-500"
+                    className={`w-7 h-7 rounded-full ring-1 ${isAdmin ? 'ring-amber-400' : 'ring-emerald-500'}`}
                   />
                 ) : (
-                  <div className="w-7 h-7 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs ${
+                    isAdmin ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-400'
+                  }`}>
                     {(currentUser.displayName || currentUser.email || 'U')[0].toUpperCase()}
                   </div>
                 )}
-                <span className="text-xs font-medium text-slate-200 hidden md:inline max-w-[90px] truncate">
-                  {currentUser.displayName?.split(' ')[0] || 'Profil'}
-                </span>
+                <div className="text-left hidden md:block max-w-[100px]">
+                  <span className="text-xs font-medium text-slate-200 block truncate">
+                    {currentUser.displayName?.split(' ')[0] || 'Profil'}
+                  </span>
+                  <span className={`text-[9px] block ${isAdmin ? 'text-amber-400 font-bold' : 'text-slate-400'}`}>
+                    {isAdmin ? 'SuperAdmin' : 'Xodim'}
+                  </span>
+                </div>
               </button>
             ) : (
               <button
@@ -160,7 +178,7 @@ export const Header: React.FC<HeaderProps> = ({
                 className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-all"
               >
                 <UserIcon className="w-4 h-4 text-emerald-400" />
-                <span>Kirish</span>
+                <span>Google Kirish</span>
               </button>
             )}
           </div>

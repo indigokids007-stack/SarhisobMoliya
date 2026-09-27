@@ -338,13 +338,26 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                     {tx.type === 'income' ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
                   </div>
                   <div>
-                    <h4 className="text-xs sm:text-sm font-semibold text-white">{tx.description}</h4>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs sm:text-sm font-semibold text-white">{tx.itemName || tx.description}</h4>
+                      {tx.quantity && (
+                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                          {tx.quantity}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
                       <span>{tx.category}</span>
                       <span>·</span>
                       <span>{formatDateUz(tx.date)}</span>
                       <span>·</span>
                       <span className="font-mono text-amber-400/90">{getTransactionTimeString(tx)}</span>
+                      {tx.createdBy?.name && (
+                        <>
+                          <span>·</span>
+                          <span className="text-indigo-400 font-medium">{tx.createdBy.name}</span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

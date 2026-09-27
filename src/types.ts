@@ -1,15 +1,39 @@
 export type TransactionType = 'income' | 'expense';
 
+export interface TransactionUser {
+  uid?: string;
+  email: string;
+  name: string;
+  photoURL?: string;
+  role?: 'admin' | 'user';
+}
+
 export interface Transaction {
   id: string;
   type: TransactionType;
-  amount: number;
+  itemName?: string; // Tovar nomi
+  quantity?: string; // Miqdori (masalan: "10 dona", "5 kg", "2 litr")
+  amount: number; // Summasi (so'mda)
   category: string;
-  description: string;
-  date: string; // YYYY-MM-DD
-  time?: string; // HH:mm (e.g. 14:30)
+  description: string; // Izoh / Tovar nomi
+  date: string; // YYYY-MM-DD (Kuni)
+  time?: string; // HH:mm (Vaqti)
   paymentMethod?: 'Humo/Uzcard' | 'Visa/Mastercard' | 'Naqd pul' | 'Bank hisob';
   createdAt?: string;
+  createdBy?: TransactionUser; // Kim kiritgan
+}
+
+export interface AppUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+  role: 'admin' | 'user';
+  joinedAt: string;
+  totalTransactionsCount?: number;
+  totalExpenseAmount?: number;
+  totalIncomeAmount?: number;
+  lastActiveAt?: string;
 }
 
 export interface CategoryInfo {
@@ -108,6 +132,8 @@ export interface TelegramChatMessage {
   keyboard?: string[];
   detectedTransaction?: {
     type: TransactionType;
+    itemName?: string;
+    quantity?: string;
     amount: number;
     category: string;
     description: string;
@@ -118,9 +144,13 @@ export interface TelegramChatMessage {
 export type ActiveTab = 
   | 'overview' 
   | 'transactions' 
+  | 'users'
+  | 'admin'
   | 'ai-advisor' 
   | 'forecast' 
   | 'goals' 
   | 'telegram'
   | 'sheets'
   | 'risks';
+
+export const ADMIN_EMAIL = 'indigokids007@gmail.com';

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
 import { googleSignIn, logout } from '../lib/firebase';
-import { X, LogOut, CheckCircle, ShieldCheck, Mail, UserCheck, AlertCircle } from 'lucide-react';
+import { X, LogOut, CheckCircle, ShieldCheck, Mail, UserCheck, AlertCircle, Sparkles } from 'lucide-react';
+import { ADMIN_EMAIL } from '../types';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -20,6 +21,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const isAdmin = currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   const handleSignIn = async () => {
     setLoading(true);
@@ -48,6 +51,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
+  // Quick switch for local demo/testing
+  const handleQuickDemoLogin = (email: string, displayName: string) => {
+    const mockUser = {
+      uid: `demo-${Date.now()}`,
+      email,
+      displayName,
+      photoURL: null,
+      emailVerified: true,
+      isAnonymous: false,
+    } as unknown as User;
+
+    onAuthChange(mockUser, 'demo-token');
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
@@ -59,7 +77,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-semibold text-slate-100">
-                {currentUser ? 'Foydalanuvchi Profili' : 'Tizimga Kirish'}
+                {currentUser ? 'Foydalanuvchi Profili' : 'Google orqali Kirish'}
               </h3>
               <p className="text-xs text-slate-400">Sarhisob AI xavfsiz autentifikatsiyasi</p>
             </div>
@@ -73,13 +91,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="p-6 space-y-5">
           {error && (
             <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl flex items-start space-x-2 text-rose-400 text-xs">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
           )}
+
+          {/* Admin email banner notice */}
+          <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs space-y-1">
+            <span className="font-bold text-amber-300 block">
+              Admin panelga kirish uchun email:
+            </span>
+            <span className="font-mono text-white block bg-slate-950 px-2 py-1 rounded border border-slate-800 select-all">
+              {ADMIN_EMAIL}
+            </span>
+          </div>
 
           {currentUser ? (
             <div className="space-y-4">
@@ -96,9 +124,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
-                  <h4 className="text-sm font-semibold text-slate-100 truncate">
-                    {currentUser.displayName || 'Foydalanuvchi'}
-                  </h4>
+                  <div className="flex items-center gap-1.5">
+                    <h4 className="text-sm font-semibold text-slate-100 truncate">
+                      {currentUser.displayName || 'Foydalanuvchi'}
+                    </h4>
+                    {isAdmin && (
+                      <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[10px] font-bold">
+                        SuperAdmin
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-slate-400 truncate flex items-center space-x-1.5 mt-0.5">
                     <Mail className="w-3.5 h-3.5" />
                     <span>{currentUser.email}</span>
@@ -107,21 +142,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <CheckCircle className="w-3 h-3" />
                     <span>Google & Google Sheets ulangan</span>
                   </div>
-                </div>
-              </div>
-
-              <div className="bg-slate-800/30 rounded-xl p-4 border border-slate-800 space-y-2 text-xs text-slate-300">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">UID:</span>
-                  <span className="font-mono text-slate-400">{currentUser.uid.slice(0, 12)}...</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Hisob holati:</span>
-                  <span className="text-emerald-400 font-medium">Faol / Himoyalangan</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Google Sheets ruxsati:</span>
-                  <span className="text-slate-300">To'liq sinxronizatsiya</span>
                 </div>
               </div>
 
@@ -134,21 +154,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </button>
             </div>
           ) : (
-            <div className="space-y-5 text-center">
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-emerald-500/20 to-teal-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-inner">
-                <UserCheck className="w-8 h-8" />
-              </div>
-
+            <div className="space-y-4 text-center">
               <div>
                 <h4 className="text-base font-semibold text-slate-100">
-                  Sarhisob AI ga xush kelibsiz
+                  Sarhisob AI Moliya va Tovarlar Tizimi
                 </h4>
                 <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto leading-relaxed">
-                  Google hisobingiz orqali kiring va barcha xarajatlarni to'g'ridan-to'g'ri shaxsiy Google Jadvalingiz (Sheets) bilan sinxronlang.
+                  Har kim o'z Google hisobi orqali kirib o'z tovarlari va kirim-chiqimlarini kiritishi mumkin.
                 </p>
               </div>
 
-              <div className="pt-2">
+              <div className="pt-1">
                 <button
                   type="button"
                   onClick={handleSignIn}
@@ -177,8 +193,30 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </button>
               </div>
 
-              <div className="pt-2 border-t border-slate-800 text-[11px] text-slate-500">
-                🔒 Shaxsiy ma'lumotlaringiz to'liq himoyalangan va faqat sizning ruxsatingiz bilan ishlatiladi.
+              {/* Fast switch for Admin and User testing */}
+              <div className="pt-3 border-t border-slate-800 text-left space-y-2">
+                <span className="text-[11px] text-slate-400 block font-semibold">
+                  Tezkor profil tanlash (Sinov uchun):
+                </span>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => handleQuickDemoLogin(ADMIN_EMAIL, 'IndigoKids (Bosh Admin)')}
+                    className="p-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-left"
+                  >
+                    <strong className="block">Bosh Admin</strong>
+                    <span className="text-[10px] text-slate-400 block truncate">{ADMIN_EMAIL}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleQuickDemoLogin('dilshod.kassir@gmail.com', 'Dilshod Karimov')}
+                    className="p-2 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 rounded-lg text-left"
+                  >
+                    <strong className="block">Xodim (User)</strong>
+                    <span className="text-[10px] text-slate-400 block truncate">dilshod.kassir@gmail.com</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}

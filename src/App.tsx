@@ -8,6 +8,8 @@ import { User } from 'firebase/auth';
 import { Header } from './components/Header';
 import { DashboardOverview } from './components/DashboardOverview';
 import { TransactionList } from './components/TransactionList';
+import { UsersView } from './components/UsersView';
+import { AdminPanelView } from './components/AdminPanelView';
 import { AIFinancialAdvisor } from './components/AIFinancialAdvisor';
 import { ExpenseForecast } from './components/ExpenseForecast';
 import { SavingsGoals } from './components/SavingsGoals';
@@ -16,7 +18,6 @@ import { GoogleSheetsSync } from './components/GoogleSheetsSync';
 import { FinancialRiskAudit } from './components/FinancialRiskAudit';
 import { TransactionFormModal } from './components/TransactionFormModal';
 import { AuthModal } from './components/AuthModal';
-import { AndroidApkModal } from './components/AndroidApkModal';
 import { VPSDeploymentModal } from './components/VPSDeploymentModal';
 
 import { 
@@ -24,7 +25,9 @@ import {
   RecurringBill, 
   SavingsGoal, 
   TelegramChatMessage, 
-  ActiveTab 
+  ActiveTab,
+  AppUser,
+  ADMIN_EMAIL 
 } from './types';
 
 import { 
@@ -32,6 +35,7 @@ import {
   INITIAL_RECURRING_BILLS, 
   INITIAL_SAVINGS_GOALS, 
   INITIAL_TELEGRAM_MESSAGES,
+  INITIAL_USERS,
   EXPENSE_CATEGORIES
 } from './data/initialData';
 
@@ -41,12 +45,22 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isApkModalOpen, setIsApkModalOpen] = useState(false);
   const [isVPSModalOpen, setIsVPSModalOpen] = useState(false);
+  const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
 
   // Authentication State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+
+  // Persistent Users list
+  const [users, setUsers] = useState<AppUser[]>(() => {
+    try {
+      const saved = localStorage.getItem('sarhisob_users');
+      return saved ? JSON.parse(saved) : INITIAL_USERS;
+    } catch {
+      return INITIAL_USERS;
+    }
+  });
 
   // Persistent state in localStorage with defaults
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
@@ -100,7 +114,51 @@ export default function App() {
     };
   }, []);
 
+  // Sync logged in user with users state
+  useEffect(() => {
+    if (currentUser?.email) {
+      const email = currentUser.email.toLowerCase();
+      const isAdmin = email === ADMIN_EMAIL.toLowerCase();
+
+      setUsers((prev) => {
+        const found = prev.find((u) => u.email.toLowerCase() === email);
+        if (found) {
+          return prev.map((u) =>
+            u.email.toLowerCase() === email
+              ? {
+                  ...u,
+                  displayName: currentUser.displayName || u.displayName,
+                  photoURL: currentUser.photoURL || u.photoURL,
+                  role: isAdmin ? 'admin' : u.role,
+                  lastActiveAt: new Date().toLocaleString('uz-UZ'),
+                }
+              : u
+          );
+        }
+        return [
+          {
+            uid: currentUser.uid,
+            email: currentUser.email!,
+            displayName: currentUser.displayName || currentUser.email!.split('@')[0],
+            photoURL: currentUser.photoURL || undefined,
+            role: isAdmin ? 'admin' : 'user',
+            joinedAt: new Date().toISOString().split('T')[0],
+            lastActiveAt: new Date().toLocaleString('uz-UZ'),
+            totalTransactionsCount: 0,
+            totalIncomeAmount: 0,
+            totalExpenseAmount: 0,
+          },
+          ...prev,
+        ];
+      });
+    }
+  }, [currentUser]);
+
   // Save changes to localStorage
+  useEffect(() => {
+    localStorage.setItem('sarhisob_users', JSON.stringify(users));
+  }, [users]);
+
   useEffect(() => {
     localStorage.setItem('sarhisob_transactions', JSON.stringify(transactions));
   }, [transactions]);
@@ -150,13 +208,59 @@ export default function App() {
 
   // Handlers
   const handleAddTransaction = (newTx: Omit<Transaction, 'id'>) => {
+    const creator = newTx.createdBy || (currentUser ? {
+      uid: currentUser.uid,
+      email: currentUser.email || 'user@sarhisob.uz',
+      name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Foydalanuvchi',
+      photoURL: currentUser.photoURL || undefined,
+      role: (currentUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'admin' : 'user') as 'admin' | 'user',
+    } : {
+      email: 'mehmon@sarhisob.uz',
+      name: 'Mehmon foydalanuvchi',
+      role: 'user' as const,
+    });
+
     const tx: Transaction = {
       ...newTx,
       id: `tx-${Date.now()}`,
+      itemName: newTx.itemName || newTx.description,
+      quantity: newTx.quantity || '1 dona',
       createdAt: new Date().toISOString(),
       time: newTx.time || new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      createdBy: creator,
     };
     setTransactions((prev) => [tx, ...prev]);
+
+    // Update user stats
+    if (creator.email) {
+      setUsers((prev) => {
+        const foundIndex = prev.findIndex((u) => u.email.toLowerCase() === creator.email.toLowerCase());
+        if (foundIndex >= 0) {
+          return prev.map((u, i) => i === foundIndex ? {
+            ...u,
+            totalTransactionsCount: (u.totalTransactionsCount || 0) + 1,
+            totalIncomeAmount: tx.type === 'income' ? (u.totalIncomeAmount || 0) + tx.amount : u.totalIncomeAmount,
+            totalExpenseAmount: tx.type === 'expense' ? (u.totalExpenseAmount || 0) + tx.amount : u.totalExpenseAmount,
+            lastActiveAt: new Date().toLocaleString('uz-UZ'),
+          } : u);
+        }
+        return [
+          {
+            uid: creator.uid || `user-${Date.now()}`,
+            email: creator.email,
+            displayName: creator.name,
+            photoURL: creator.photoURL,
+            role: creator.role || 'user',
+            joinedAt: new Date().toISOString().split('T')[0],
+            totalTransactionsCount: 1,
+            totalIncomeAmount: tx.type === 'income' ? tx.amount : 0,
+            totalExpenseAmount: tx.type === 'expense' ? tx.amount : 0,
+            lastActiveAt: new Date().toLocaleString('uz-UZ'),
+          },
+          ...prev,
+        ];
+      });
+    }
   };
 
   const handleDeleteTransaction = (id: string) => {
@@ -208,10 +312,12 @@ export default function App() {
   const handleResetToDemo = () => {
     if (confirm("Namunaviy ma'lumotlarni qayta tiklashni xohlaysizmi?")) {
       setTransactions(INITIAL_TRANSACTIONS);
+      setUsers(INITIAL_USERS);
       setRecurringBills(INITIAL_RECURRING_BILLS);
       setGoals(INITIAL_SAVINGS_GOALS);
       setTelegramMessages(INITIAL_TELEGRAM_MESSAGES);
       localStorage.removeItem('sarhisob_transactions');
+      localStorage.removeItem('sarhisob_users');
       localStorage.removeItem('sarhisob_bills');
       localStorage.removeItem('sarhisob_goals');
       localStorage.removeItem('sarhisob_tg_messages');
@@ -231,7 +337,6 @@ export default function App() {
         onOpenTelegram={() => setActiveTab('telegram')}
         currentUser={currentUser}
         onOpenAuth={() => setIsAuthModalOpen(true)}
-        onOpenAndroidApk={() => setIsApkModalOpen(true)}
         onOpenVPSModal={() => setIsVPSModalOpen(true)}
         criticalIssuesCount={criticalCount}
       />
@@ -255,6 +360,48 @@ export default function App() {
             transactions={transactions}
             onDeleteTransaction={handleDeleteTransaction}
             onOpenAddModal={() => setIsAddModalOpen(true)}
+            currentUserEmail={currentUser?.email || null}
+            initialUserFilter={selectedUserFilter}
+          />
+        )}
+
+        {activeTab === 'users' && (
+          <UsersView
+            users={users}
+            transactions={transactions}
+            currentUserEmail={currentUser?.email || null}
+            onOpenAddModal={() => setIsAddModalOpen(true)}
+            onSelectUserFilter={(email) => {
+              setSelectedUserFilter(email);
+              if (email) {
+                setActiveTab('transactions');
+              }
+            }}
+            onOpenAuth={() => setIsAuthModalOpen(true)}
+          />
+        )}
+
+        {activeTab === 'admin' && (
+          <AdminPanelView
+            currentUserEmail={currentUser?.email || null}
+            users={users}
+            transactions={transactions}
+            balance={currentBalance}
+            onDeleteTransaction={handleDeleteTransaction}
+            onOpenGoogleSheets={() => setActiveTab('sheets')}
+            onOpenAuth={() => setIsAuthModalOpen(true)}
+          />
+        )}
+
+        {activeTab === 'sheets' && (
+          <GoogleSheetsSync
+            currentUser={currentUser}
+            accessToken={accessToken}
+            transactions={transactions}
+            recurringBills={recurringBills}
+            goals={goals}
+            balance={currentBalance}
+            onOpenLogin={() => setIsAuthModalOpen(true)}
           />
         )}
 
@@ -287,18 +434,6 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'sheets' && (
-          <GoogleSheetsSync
-            currentUser={currentUser}
-            accessToken={accessToken}
-            transactions={transactions}
-            recurringBills={recurringBills}
-            goals={goals}
-            balance={currentBalance}
-            onOpenLogin={() => setIsAuthModalOpen(true)}
-          />
-        )}
-
         {activeTab === 'risks' && (
           <FinancialRiskAudit
             transactions={transactions}
@@ -320,23 +455,16 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
+      {/* Footer (Android APK removed) */}
       <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p>© 2026 Sarhisob AI — Sun'iy intellekt asosidagi shaxsiy moliyaviy tizim, Google Sheets va Telegram boti.</p>
+          <p>© 2026 Sarhisob AI — Tovarlar nazorati, Google Sheets, Users tizimi va Telegram Mini App.</p>
           <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsApkModalOpen(true)}
-              className="text-emerald-400 hover:text-emerald-300 transition-colors"
-            >
-              Android APK O'rnatish
-            </button>
-            <span className="text-slate-800">|</span>
             <button
               onClick={() => setIsVPSModalOpen(true)}
               className="text-blue-400 hover:text-blue-300 transition-colors"
             >
-              VPS Deploy
+              VPS Deploy Sozlamalari
             </button>
             <span className="text-slate-800">|</span>
             <button
@@ -354,6 +482,7 @@ export default function App() {
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
         onAddTransaction={handleAddTransaction}
+        currentUser={currentUser}
       />
 
       <AuthModal
@@ -364,11 +493,6 @@ export default function App() {
           setCurrentUser(user);
           setAccessToken(token || null);
         }}
-      />
-
-      <AndroidApkModal
-        isOpen={isApkModalOpen}
-        onClose={() => setIsApkModalOpen(false)}
       />
 
       <VPSDeploymentModal
