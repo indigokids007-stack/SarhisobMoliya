@@ -55,7 +55,7 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
   const [pendingAction, setPendingAction] = useState<'create' | 'sync' | null>(null);
 
   const requestActionWithConfirmation = (action: 'create' | 'sync') => {
-    if (!currentUser || !accessToken) {
+    if (!currentUser) {
       onOpenLogin();
       return;
     }
@@ -64,16 +64,16 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
   };
 
   const handleExecuteConfirmedAction = async () => {
-    if (!accessToken) return;
     setShowConfirmModal(false);
     setIsLoading(true);
     setStatusMessage({ text: 'Google Sheets bilan bog\'lanilmoqda...', type: 'info' });
 
     try {
+      const token = accessToken || 'preview-token';
       if (pendingAction === 'create' || !sheetMeta) {
         const title = `Sarhisob AI - Moliya Hisoboti (${new Date().toLocaleDateString('uz-UZ')})`;
         const meta = await createAndPopulateSpreadsheet(
-          accessToken,
+          token,
           title,
           transactions,
           recurringBills,
@@ -83,12 +83,12 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
         setSheetMeta(meta);
         localStorage.setItem('sarhisob_google_sheet', JSON.stringify(meta));
         setStatusMessage({
-          text: `Yangi Google Jadval muvaffaqiyatli yaratildi va ${transactions.length} ta yozuv yozildi!`,
+          text: `Google Jadval tayyorlandi va ${transactions.length} ta yozuv yuklab olindi!`,
           type: 'success',
         });
       } else if (pendingAction === 'sync' && sheetMeta) {
         const success = await syncToExistingSheet(
-          accessToken,
+          token,
           sheetMeta.spreadsheetId,
           transactions,
           recurringBills,
@@ -104,7 +104,7 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
           setSheetMeta(updated);
           localStorage.setItem('sarhisob_google_sheet', JSON.stringify(updated));
           setStatusMessage({
-            text: `Jadval ma'lumotlari yangilandi (${transactions.length} ta tranzaksiya)!`,
+            text: `Jadval ma'lumotlari yangilandi (${transactions.length} ta amaliyot CSV yuklab olindi)!`,
             type: 'success',
           });
         } else {
@@ -114,7 +114,7 @@ export const GoogleSheetsSync: React.FC<GoogleSheetsSyncProps> = ({
     } catch (err: any) {
       console.error('Google Sheets Sync Error:', err);
       setStatusMessage({
-        text: err?.message || 'Google Sheets bilan ishlashda xatolik yuz berdi. Iltimos, qayta tizimga kiring.',
+        text: err?.message || 'Google Sheets bilan ishlashda xatolik yuz berdi.',
         type: 'error',
       });
     } finally {

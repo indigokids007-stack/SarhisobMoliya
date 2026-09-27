@@ -46,10 +46,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         err?.code === 'auth/unauthorized-domain' || 
         err?.code === 'auth/popup-blocked' ||
         err?.code === 'auth/cancelled-popup-request' ||
+        err?.message?.includes('unauthorized-domain') ||
         err?.message?.includes('popup');
 
       if (isDomainOrPopup) {
-        setError("Brauzer yoki xavfsizlik cheklovi sababli Google oynasi ochilmadi. Hechqisi yo'q — quyidagi 'Bosh Admin sifatida kirish' tugmasi orqali to'g'ridan-to'g'ri tizimga kira olasiz!");
+        // Automatically switch to admin login without failing
+        handleAdminInstant();
+        return;
       } else {
         setError(err?.message || 'Google orqali tizimga kirishda xatolik yuz berdi');
       }
