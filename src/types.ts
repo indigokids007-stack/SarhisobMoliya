@@ -143,6 +143,7 @@ export interface TelegramChatMessage {
 
 export type ActiveTab = 
   | 'overview' 
+  | 'analytics'
   | 'transactions' 
   | 'users'
   | 'admin'

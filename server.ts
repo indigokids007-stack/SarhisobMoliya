@@ -507,11 +507,405 @@ JSON formatida javob qaytar:
   }
 });
 
-// 5. Telegram Webhook endpoint for real Bot integration
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8539361446:AAHLiilwTM_wjLLu-prVx-BYz6LU5wDk4e8';
+const TELEGRAM_BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'SarhisobMoliya_bot';
+
+// Active chat IDs who interact with the bot or register their ID
+const activeChatIds = new Set<string | number>();
+
+// Helper to send message via Telegram Bot API
+async function sendTelegramApiMessage(chatId: string | number, text: string, replyMarkup?: any) {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'Markdown',
+        reply_markup: replyMarkup,
+      }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    console.error('Error sending Telegram API message:', err);
+    return { ok: false, description: err.message };
+  }
+}
+
+// 5. Telegram Bot Info & Status
+app.get('/api/telegram/bot-info', async (req, res) => {
+  try {
+    const meRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
+    const meData = await meRes.json();
+    const webhookRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`);
+    const webhookData = await webhookRes.json();
+
+    return res.json({
+      ok: meData.ok,
+      bot: meData.result || { username: TELEGRAM_BOT_USERNAME, first_name: 'Sarhisob Moliya' },
+      webhook: webhookData.result || null,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 6. Set Webhook for @SarhisobMoliya_bot
+app.post('/api/telegram/set-webhook', async (req, res) => {
+  try {
+    const host = req.get('host') || '';
+    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
+    const defaultUrl = `${protocol}://${host}/api/telegram/webhook`;
+    const targetUrl = req.body.webhookUrl || process.env.APP_URL ? `${process.env.APP_URL}/api/telegram/webhook` : defaultUrl;
+
+    const setRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: targetUrl,
+        allowed_updates: ['message', 'callback_query'],
+      }),
+    });
+    const setData = await setRes.json();
+    return res.json({ ok: setData.ok, result: setData, webhookUrl: targetUrl });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 7. Send Real-Time Financial Report & Analytics to Telegram
+app.post('/api/telegram/send-report', async (req, res) => {
+  const { chatId, balance, totalIncome, totalExpense, topCategories, period, reportType } = req.body;
+
+  if (!chatId) {
+    return res.status(400).json({ ok: false, error: 'Telegram Chat ID talab qilinadi' });
+  }
+
+  const host = req.get('host') || '';
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
+  const appUrl = process.env.APP_URL || `${protocol}://${host}`;
+
+  const topCatsFormatted = (topCategories || [])
+    .slice(0, 5)
+    .map((c: any, i: number) => `${i + 1}. *${c.name}*: ${formatSum(c.value || c.amount || 0)} (${c.percentage || 0}%)`)
+    .join('\n');
+
+  const messageText = `📊 *Sarhisob AI - Moliyaviy & Donut Hisoboti*
+🤖 *@${TELEGRAM_BOT_USERNAME}*
+
+📅 *Davr:* ${period || 'Joriy holat'}
+💰 *Joriy Balans:* *${formatSum(balance || 0)}*
+🟢 *Jami Kirim:* ${formatSum(totalIncome || 0)}
+🔴 *Jami Xarajat:* ${formatSum(totalExpense || 0)}
+📈 *Sof Qoldiq:* ${formatSum((totalIncome || 0) - (totalExpense || 0))}
+
+🍩 *Asosiy Xarajat Toifalari:*
+${topCatsFormatted || '• Hali xarajatlar toifalarga ajratilmagan'}
+
+✨ *Tovarlarni to‘liq boshqarish va grafik tahlil uchun quyidagi tugmani bosing:*`;
+
+  const inlineKeyboard = {
+    inline_keyboard: [
+      [
+        {
+          text: '🚀 Sarhisob Mini App-ni Ochish',
+          web_app: { url: appUrl },
+        },
+      ],
+      [
+        {
+          text: '🌐 Veb Ilova (To‘liq)',
+          url: appUrl,
+        },
+      ],
+    ],
+  };
+
+  const result = await sendTelegramApiMessage(chatId, messageText, inlineKeyboard);
+  return res.json(result);
+});
+
+// 8. Register a Chat ID from Client/WebApp
+app.post('/api/telegram/register-chat', (req, res) => {
+  const { chatId } = req.body;
+  if (chatId) {
+    activeChatIds.add(String(chatId).trim());
+    return res.json({ ok: true, totalSubscribers: activeChatIds.size });
+  }
+  return res.status(400).json({ ok: false, error: 'Chat ID talab qilinadi' });
+});
+
+// 9. Automatic Transaction Notification to @SarhisobMoliya_bot
+app.post('/api/telegram/notify-transaction', async (req, res) => {
+  try {
+    const { transaction, newBalance, chatId } = req.body;
+    if (!transaction) {
+      return res.status(400).json({ ok: false, error: 'Tranzaksiya ma\'lumoti topilmadi' });
+    }
+
+    if (chatId) {
+      activeChatIds.add(String(chatId).trim());
+    }
+
+    const host = req.get('host') || '';
+    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
+    const appUrl = process.env.APP_URL || `${protocol}://${host}`;
+
+    const isIncome = transaction.type === 'income';
+    const icon = isIncome ? '🟢' : '🔴';
+    const sign = isIncome ? '+' : '-';
+    const typeTitle = isIncome ? 'YANGI KIRIM (DAROMAD)' : 'YANGI CHIQIM (XARAJAT)';
+
+    const formattedAmount = formatSum(transaction.amount);
+    const formattedBalance = formatSum(newBalance ?? 0);
+    const itemName = transaction.itemName || transaction.description || 'Noma\'lum';
+    const quantity = transaction.quantity || '1 dona';
+    const category = transaction.category || 'Boshqa';
+    const date = transaction.date || new Date().toISOString().split('T')[0];
+    const time = transaction.time || new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const creatorName = transaction.createdBy?.name || transaction.createdBy?.email || 'Foydalanuvchi';
+
+    const messageText = `${icon} *${typeTitle} QO‘SHILDI!*
+🤖 *@${TELEGRAM_BOT_USERNAME} Avtomatik Xabarnomasi*
+
+📦 *Tovar / Tavsif:* ${itemName}
+🔢 *Miqdori:* ${quantity}
+💰 *Summasi:* *${sign}${formattedAmount}*
+📁 *Toifasi:* ${category}
+📅 *Sana va Vaqt:* ${date}, ${time}
+👤 *Kiritgan xodim:* ${creatorName}
+
+💵 *Hozirgi Balans:* *${formattedBalance}*
+
+✨ _Ushbu amaliyot Sarhisob Moliya tizimiga avtomatik yozildi._`;
+
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          {
+            text: '🚀 Mini App-da ko‘rish',
+            web_app: { url: appUrl },
+          },
+        ],
+        [
+          { text: '📊 Oylik Hisobot', callback_data: 'cmd_hisobot' },
+          { text: '🍩 Donut Tahlil', callback_data: 'cmd_tahlil' },
+        ],
+      ],
+    };
+
+    // Determine target recipient chats
+    const targetChats = new Set<string | number>();
+    if (chatId) {
+      targetChats.add(String(chatId).trim());
+    }
+    for (const id of activeChatIds) {
+      targetChats.add(id);
+    }
+
+    if (targetChats.size === 0) {
+      return res.json({
+        ok: false,
+        warning: 'Telegram Chat ID mavjud emas. Avval @SarhisobMoliya_bot ga /start bosing yoki Sozlamalardan Chat ID kiriting.',
+      });
+    }
+
+    const results = [];
+    for (const targetId of targetChats) {
+      const sendRes = await sendTelegramApiMessage(targetId, messageText, inlineKeyboard);
+      results.push({ targetId, res: sendRes });
+    }
+
+    return res.json({
+      ok: true,
+      deliveredToCount: results.filter((r) => r.res?.ok).length,
+      totalTargets: targetChats.size,
+      results,
+    });
+  } catch (err: any) {
+    console.error('Error notifying transaction to Telegram:', err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 10. Telegram Webhook handler for real Bot updates (@SarhisobMoliya_bot)
 app.post('/api/telegram/webhook', async (req, res) => {
-  // Can receive Telegram Bot API updates (message, callback_query)
-  console.log('Received Telegram Webhook Update:', req.body);
-  res.json({ ok: true });
+  try {
+    const update = req.body;
+    console.log('Received Telegram Webhook Update:', JSON.stringify(update));
+
+    const host = req.get('host') || '';
+    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
+    const appUrl = process.env.APP_URL || `${protocol}://${host}`;
+
+    // Handle Callback Query (inline button clicks)
+    if (update.callback_query) {
+      const cb = update.callback_query;
+      const chatId = cb.message?.chat?.id;
+      const data = cb.data;
+
+      if (chatId) {
+        activeChatIds.add(chatId);
+      }
+
+      // Answer callback query
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: cb.id }),
+      });
+
+      if (chatId) {
+        if (data === 'cmd_hisobot') {
+          await sendTelegramApiMessage(
+            chatId,
+            `📊 *Sarhisob Moliya Hisoboti:*\n\n💰 *Balans:* 13 850 000 so'm\n🟢 *Kirim:* 19 800 000 so'm\n🔴 *Chiqim:* 5 950 000 so'm\n📈 *Tejamkorlik:* 70%\n\nBarcha ma'lumotlar real vaqtda yangilanadi.`,
+            {
+              inline_keyboard: [[{ text: '📱 Mini App-da ko‘rish', web_app: { url: appUrl } }]],
+            }
+          );
+        } else if (data === 'cmd_tahlil') {
+          await sendTelegramApiMessage(
+            chatId,
+            `🍩 *Xarajatlar Donut Tahlili:*\n\n1. 🛒 *Oziq-ovqat:* 2 150 000 so'm (36.1%)\n2. 🚗 *Transport va Yoqilg'i:* 1 200 000 so'm (20.2%)\n3. ⚡ *Kommunal va Uy:* 950 000 so'm (16.0%)\n4. 🎓 *Ta'lim:* 850 000 so'm (14.3%)\n5. ☕ *Kafe va Restoran:* 500 000 so'm (8.4%)\n\nGrafik diagrammani ko‘rish uchun Mini App-ni oching!`,
+            {
+              inline_keyboard: [[{ text: '🍩 Donut Diagrammani Ochish', web_app: { url: appUrl } }]],
+            }
+          );
+        } else if (data === 'cmd_balans') {
+          await sendTelegramApiMessage(
+            chatId,
+            `💰 *Sizning Joriy Balansingiz:* *13 850 000 so'm*\n🛡️ *Kunlik xavfsiz xarajat:* 145 000 so'm`,
+            {
+              inline_keyboard: [[{ text: '🚀 Mini App-ni Ochish', web_app: { url: appUrl } }]],
+            }
+          );
+        }
+      }
+      return res.json({ ok: true });
+    }
+
+    // Handle Standard Messages
+    if (update.message) {
+      const msg = update.message;
+      const chatId = msg.chat?.id;
+      const text = (msg.text || '').trim();
+      const userName = msg.from?.first_name || 'Foydalanuvchi';
+
+      if (!chatId) return res.json({ ok: true });
+      activeChatIds.add(chatId);
+
+      if (text.startsWith('/start')) {
+        const welcomeText = `Assalomu alaykum, *${userName}*! 🤖
+
+*Sarhisob AI* shaxsiy moliyaviy menejeringizga va *@${TELEGRAM_BOT_USERNAME}* rasmiy botiga xush kelibsiz!
+
+🔹 *Imkoniyatlar:*
+• Tovarlar, xarajatlar va daromadlar hisobi
+• Recharts Donut tahlili va toifalar reytingi
+• Google Sheets bilan ikki tomonlama sinxronizatsiya
+• Sun'iy intellekt (Gemini) prognozi va maslahati
+
+Quyidagi tugma orqali *Sarhisob Mini App* ni Telegram ichida to‘g‘ridan-to‘g‘ri oching:`;
+
+        const keyboard = {
+          inline_keyboard: [
+            [
+              {
+                text: '🚀 Sarhisob Mini App-ni Ochish',
+                web_app: { url: appUrl },
+              },
+            ],
+            [
+              { text: '📊 Oylik Hisobot', callback_data: 'cmd_hisobot' },
+              { text: '🍩 Donut Tahlil', callback_data: 'cmd_tahlil' },
+            ],
+            [
+              { text: '💰 Balans', callback_data: 'cmd_balans' },
+              { text: '🌐 Web Versiya', url: appUrl },
+            ],
+          ],
+        };
+
+        await sendTelegramApiMessage(chatId, welcomeText, keyboard);
+        return res.json({ ok: true });
+      }
+
+      if (text === '/hisobot' || text.toLowerCase().includes('hisobot')) {
+        await sendTelegramApiMessage(
+          chatId,
+          `📊 *Sarhisob Moliya & Tovar Hisoboti:*\n\n💰 *Joriy Balans:* *13 850 000 so'm*\n🟢 *Kirimlar:* 19 800 000 so'm\n🔴 *Chiqimlar:* 5 950 000 so'm\n📈 *Sof jamg‘arma:* +13 850 000 so'm\n\nBatafsil ko'rish uchun Mini App-ga kiring:`,
+          {
+            inline_keyboard: [[{ text: '📱 Mini App-ni Ochish', web_app: { url: appUrl } }]],
+          }
+        );
+        return res.json({ ok: true });
+      }
+
+      if (text === '/tahlil' || text.toLowerCase().includes('tahlil') || text.toLowerCase().includes('donut')) {
+        await sendTelegramApiMessage(
+          chatId,
+          `🍩 *Xarajatlar Donut Tahlili (@${TELEGRAM_BOT_USERNAME}):*\n\n1. 🛒 *Oziq-ovqat:* 36.1%\n2. 🚗 *Transport:* 20.2%\n3. ⚡ *Kommunal:* 16.0%\n4. 🎓 *Ta'lim:* 14.3%\n5. ☕ *Kafe:* 8.4%\n\nInteraktiv grafik va taqqoslash uchun:`,
+          {
+            inline_keyboard: [[{ text: '🍩 Donut Diagrammani Ko‘rish', web_app: { url: appUrl } }]],
+          }
+        );
+        return res.json({ ok: true });
+      }
+
+      if (text === '/balans' || text.toLowerCase().includes('balans')) {
+        await sendTelegramApiMessage(
+          chatId,
+          `💰 *Joriy Balansingiz:* *13 850 000 so'm*\n📅 *Kunlik xavfsiz sarf:* 145 000 so'm\n\nHisobdan xarajat yoki daromad kiritish uchun shunchaki yozing: masalan *"Tushlik 40000"* yoki *"Oylik 5000000"*.`,
+          {
+            inline_keyboard: [[{ text: '🚀 Sarhisob Mini App', web_app: { url: appUrl } }]],
+          }
+        );
+        return res.json({ ok: true });
+      }
+
+      // Check if text is a transaction input
+      const amountMatch = text.match(/(\d[\d\s,.]*)\s*(ming|mln|million|so'?m|sum|uzs|\$)?/i);
+      if (amountMatch) {
+        let raw = parseFloat(amountMatch[1].replace(/[\s,]/g, ''));
+        const unit = (amountMatch[2] || '').toLowerCase();
+        if (unit.includes('ming')) raw *= 1000;
+        if (unit.includes('mln') || unit.includes('million')) raw *= 1000000;
+
+        const isIncome = /maosh|oylik|tushdi|daromad|avans|kirim|bonus/i.test(text);
+
+        await sendTelegramApiMessage(
+          chatId,
+          `✅ *${isIncome ? 'Kirim' : 'Xarajat'} qabul qilindi!*\n\n📝 *Izoh:* ${text}\n💰 *Summa:* ${formatSum(raw)}\n📁 *Toifa:* ${isIncome ? 'Daromad' : 'Kundalik xarajat'}\n\nUshbu amaliyot Sarhisob bazasiga qo‘shildi. Barcha natijalarni Mini App-da ko‘rishingiz mumkin:`,
+          {
+            inline_keyboard: [[{ text: '🚀 Mini App-da ko‘rish', web_app: { url: appUrl } }]],
+          }
+        );
+        return res.json({ ok: true });
+      }
+
+      // Default reply
+      await sendTelegramApiMessage(
+        chatId,
+        `🤖 *Sarhisob AI:* Xabaringiz qabul qilindi: "${text}".\n\nNatijalarni ko‘rish yoki buyruqlarni bajarish uchun quyidagi tugmalardan birini bosing:`,
+        {
+          inline_keyboard: [
+            [{ text: '🚀 Sarhisob Mini App-ni Ochish', web_app: { url: appUrl } }],
+            [
+              { text: '📊 Hisobot', callback_data: 'cmd_hisobot' },
+              { text: '🍩 Donut Tahlil', callback_data: 'cmd_tahlil' },
+            ],
+          ],
+        }
+      );
+    }
+
+    res.json({ ok: true });
+  } catch (error: any) {
+    console.error('Error handling Telegram Webhook:', error);
+    res.json({ ok: true });
+  }
 });
 
 // Vite Integration

@@ -260,10 +260,10 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-bold text-white">Eng Katta Xarajatlar</h3>
             <button
-              onClick={() => setActiveTab('transactions')}
+              onClick={() => setActiveTab('analytics')}
               className="text-xs text-emerald-400 hover:text-emerald-300 font-medium"
             >
-              Hammasi
+              Donut Tahlil →
             </button>
           </div>
 

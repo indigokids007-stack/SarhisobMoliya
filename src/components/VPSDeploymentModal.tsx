@@ -17,7 +17,7 @@ interface VPSDeploymentModalProps {
 }
 
 export const VPSDeploymentModal: React.FC<VPSDeploymentModalProps> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'quick' | 'docker' | 'nginx' | 'pm2'>('quick');
+  const [activeTab, setActiveTab] = useState<'quick' | 'github' | 'docker' | 'nginx'>('github');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -27,6 +27,23 @@ export const VPSDeploymentModal: React.FC<VPSDeploymentModalProps> = ({ isOpen, 
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   };
+
+  const githubActionsInstructions = `# GitHub Actions avtomatik deploy (.github/workflows/deploy.yml)
+
+# 1. GitHub repozitoriyangiz "Settings" -> "Secrets and variables" -> "Actions" ga kiring:
+# Quyidagi 3 ta Secret ni qo'shing:
+# - VPS_HOST: VPS IP manzilingiz (masalan: 194.87.123.45)
+# - VPS_USER: VPS foydalanuvchi nomi (masalan: root)
+# - VPS_SSH_PRIVATE_KEY: VPS ga kirish uchun shaxsiy SSH kalit (id_rsa yoki id_ed25519)
+
+# 2. VPS serverda papkani tayyorlash (bir martalik buyruq):
+mkdir -p /var/www/SarhisobMoliya
+cd /var/www/SarhisobMoliya
+git clone <sizning-github-repo-link> .
+cp .env.example .env
+
+# 3. Endi har safar 'main' branchga push qilganingizda:
+# GitHub Actions avtomatik tarzda VPS ga ulanadi va Docker konteynerni yangilaydi!`;
 
   const quickCommands = `# 1. VPS serveringizga SSH orqali kiring
 ssh root@your-vps-ip
@@ -113,10 +130,32 @@ sudo certbot --nginx -d moliya.sizning-domeningiz.uz`;
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-800 bg-slate-950/40 px-5 pt-3 gap-2">
+        <div className="flex border-b border-slate-800 bg-slate-950/40 px-5 pt-3 gap-2 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('github')}
+            className={`pb-3 px-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 whitespace-nowrap ${
+              activeTab === 'github'
+                ? 'border-emerald-500 text-emerald-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            <span>GitHub Actions CI/CD</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('docker')}
+            className={`pb-3 px-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 whitespace-nowrap ${
+              activeTab === 'docker'
+                ? 'border-emerald-500 text-emerald-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Docker & Bun</span>
+          </button>
           <button
             onClick={() => setActiveTab('quick')}
-            className={`pb-3 px-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 ${
+            className={`pb-3 px-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 whitespace-nowrap ${
               activeTab === 'quick'
                 ? 'border-emerald-500 text-emerald-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -126,31 +165,55 @@ sudo certbot --nginx -d moliya.sizning-domeningiz.uz`;
             <span>1-Click Deploy (Bash)</span>
           </button>
           <button
-            onClick={() => setActiveTab('docker')}
-            className={`pb-3 px-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 ${
-              activeTab === 'docker'
-                ? 'border-emerald-500 text-emerald-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Docker & Compose</span>
-          </button>
-          <button
             onClick={() => setActiveTab('nginx')}
-            className={`pb-3 px-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 ${
+            className={`pb-3 px-3 text-xs font-semibold border-b-2 transition-all flex items-center space-x-2 whitespace-nowrap ${
               activeTab === 'nginx'
                 ? 'border-emerald-500 text-emerald-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             <FileCode className="w-3.5 h-3.5" />
-            <span>Nginx & SSL Sertifikat</span>
+            <span>Nginx & SSL</span>
           </button>
         </div>
 
         {/* Content */}
         <div className="p-6 space-y-5">
+          {activeTab === 'github' && (
+            <div className="space-y-4">
+              <div className="p-4 bg-emerald-950/30 border border-emerald-500/20 rounded-xl text-xs text-slate-300 flex items-start space-x-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-semibold text-emerald-300">
+                    GitHub Actions avtomatik deploy tayyor (.github/workflows/deploy.yml)
+                  </p>
+                  <p className="text-slate-300 leading-relaxed">
+                    Siz GitHub'ga o'zgarishlarni yuklashingiz bilanoq (push qilinganda), GitHub Actions avtomatik ravishda VPS serveringizdagi <code>/var/www/SarhisobMoliya</code> papkasida Docker konteynerni yangilaydi va qayta ishga tushiradi!
+                  </p>
+                </div>
+              </div>
+
+              <div className="relative bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-emerald-400 overflow-x-auto">
+                <pre>{githubActionsInstructions}</pre>
+                <button
+                  onClick={() => copy(githubActionsInstructions, 'github')}
+                  className="absolute top-3 right-3 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] flex items-center space-x-1 transition-colors"
+                >
+                  {copiedId === 'github' ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Nusxalandi</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Nusxalash</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
           {activeTab === 'quick' && (
             <div className="space-y-4">
               <div className="p-4 bg-emerald-950/30 border border-emerald-500/20 rounded-xl text-xs text-slate-300 flex items-start space-x-3">

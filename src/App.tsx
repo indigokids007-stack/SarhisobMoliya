@@ -16,6 +16,7 @@ import { SavingsGoals } from './components/SavingsGoals';
 import { TelegramBotView } from './components/TelegramBotView';
 import { GoogleSheetsSync } from './components/GoogleSheetsSync';
 import { FinancialRiskAudit } from './components/FinancialRiskAudit';
+import { AnalyticsView } from './components/AnalyticsView';
 import { TransactionFormModal } from './components/TransactionFormModal';
 import { AuthModal } from './components/AuthModal';
 import { VPSDeploymentModal } from './components/VPSDeploymentModal';
@@ -40,6 +41,7 @@ import {
 } from './data/initialData';
 
 import { initAuth, getCachedOAuthToken } from './lib/firebase';
+import { notifyNewTransactionViaServer, DEFAULT_TELEGRAM_BOT_USERNAME } from './services/telegramService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
@@ -47,6 +49,7 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isVPSModalOpen, setIsVPSModalOpen] = useState(false);
   const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
+  const [telegramToast, setTelegramToast] = useState<{ message: string; ok: boolean } | null>(null);
 
   // Authentication State with persistent storage
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -340,6 +343,23 @@ export default function App() {
         ];
       });
     }
+
+    // Automatically send real-time notification to @SarhisobMoliya_bot
+    const updatedBalance = tx.type === 'income' ? currentBalance + tx.amount : currentBalance - tx.amount;
+    notifyNewTransactionViaServer({
+      transaction: tx,
+      newBalance: updatedBalance,
+    }).then((res) => {
+      if (res.ok) {
+        setTelegramToast({
+          message: `${tx.type === 'income' ? '🟢 Kirim' : '🔴 Chiqim'} @${DEFAULT_TELEGRAM_BOT_USERNAME} botiga avtomatik yuborildi!`,
+          ok: true,
+        });
+        setTimeout(() => setTelegramToast(null), 5000);
+      }
+    }).catch((err) => {
+      console.warn('Auto Telegram notification notice:', err);
+    });
   };
 
   const handleDeleteTransaction = (id: string) => {
@@ -432,6 +452,14 @@ export default function App() {
             setActiveTab={setActiveTab}
             onOpenAddModal={() => setIsAddModalOpen(true)}
             onOpenTelegram={() => setActiveTab('telegram')}
+          />
+        )}
+
+        {activeTab === 'analytics' && (
+          <AnalyticsView
+            transactions={transactions}
+            users={users}
+            onOpenAddModal={() => setIsAddModalOpen(true)}
           />
         )}
 

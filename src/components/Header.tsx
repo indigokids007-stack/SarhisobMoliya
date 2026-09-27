@@ -16,7 +16,8 @@ import {
   User as UserIcon,
   ShieldCheck,
   Users,
-  Package
+  Package,
+  PieChart
 } from 'lucide-react';
 import { ActiveTab, ADMIN_EMAIL } from '../types';
 import { formatUZS } from '../utils/formatters';
@@ -62,6 +63,7 @@ export const Header: React.FC<HeaderProps> = ({
     badge?: React.ReactNode 
   }[] = [
     { id: 'overview', label: 'Umumiy holat', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'analytics', label: 'Tahlil & Donut', icon: <PieChart className="w-4 h-4 text-cyan-400" /> },
     { id: 'transactions', label: 'Tovarlar & Amaliyotlar', icon: <Package className="w-4 h-4 text-emerald-400" /> },
     { id: 'users', label: 'Foydalanuvchilar (Users)', icon: <Users className="w-4 h-4 text-indigo-400" /> },
     { 

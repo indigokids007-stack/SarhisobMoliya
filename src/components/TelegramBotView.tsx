@@ -33,6 +33,10 @@ import { sendTelegramMessage } from '../services/api';
 import { 
   testTelegramBotToken, 
   sendTelegramNotification, 
+  setTelegramBotWebhook,
+  sendFinancialReportViaServer,
+  DEFAULT_TELEGRAM_BOT_TOKEN,
+  DEFAULT_TELEGRAM_BOT_USERNAME,
   TelegramBotConfig 
 } from '../services/telegramService';
 import { formatUZS, formatDateUz } from '../utils/formatters';
@@ -69,9 +73,31 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
   const [botConfig, setBotConfig] = useState<TelegramBotConfig>(() => {
     try {
       const saved = localStorage.getItem('sarhisob_telegram_config');
-      return saved ? JSON.parse(saved) : { botToken: '', chatId: '', botUsername: 'SarhisobMoliyaBot' };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          botToken: parsed.botToken || DEFAULT_TELEGRAM_BOT_TOKEN,
+          chatId: parsed.chatId || '',
+          botUsername: parsed.botUsername || DEFAULT_TELEGRAM_BOT_USERNAME,
+          botFirstName: parsed.botFirstName || 'Sarhisob Moliya',
+          isConnected: true,
+        };
+      }
+      return {
+        botToken: DEFAULT_TELEGRAM_BOT_TOKEN,
+        chatId: '',
+        botUsername: DEFAULT_TELEGRAM_BOT_USERNAME,
+        botFirstName: 'Sarhisob Moliya',
+        isConnected: true,
+      };
     } catch {
-      return { botToken: '', chatId: '', botUsername: 'SarhisobMoliyaBot' };
+      return {
+        botToken: DEFAULT_TELEGRAM_BOT_TOKEN,
+        chatId: '',
+        botUsername: DEFAULT_TELEGRAM_BOT_USERNAME,
+        botFirstName: 'Sarhisob Moliya',
+        isConnected: true,
+      };
     }
   });
 
@@ -79,6 +105,10 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
   const [tokenStatus, setTokenStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [sendingTestNotify, setSendingTestNotify] = useState(false);
   const [notifyStatus, setNotifyStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [settingWebhook, setSettingWebhook] = useState(false);
+  const [webhookStatus, setWebhookStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [sendingReport, setSendingReport] = useState(false);
+  const [reportStatus, setReportStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Telegram WebApp detection
   const isInsideTelegram = isRunningInTelegram();
@@ -171,6 +201,99 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
       setNotifyStatus({ text: err.message || 'Xatolik', type: 'error' });
     } finally {
       setSendingTestNotify(false);
+    }
+  };
+
+  const handleAutoSetWebhook = async () => {
+    setSettingWebhook(true);
+    setWebhookStatus(null);
+    try {
+      const webhookUrl = `${window.location.origin}/api/telegram/webhook`;
+      const res = await fetch('/api/telegram/set-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setWebhookStatus({
+          text: `Webhook muvaffaqiyatli ulandi! Endi @${botConfig.botUsername || DEFAULT_TELEGRAM_BOT_USERNAME} botiga Telegramda yozilgan har qanday xabarga jonli javob qaytariladi.`,
+          type: 'success',
+        });
+        triggerHaptic('success');
+      } else {
+        setWebhookStatus({
+          text: data.result?.description || data.error || 'Webhook o\'rnatishda xatolik',
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      setWebhookStatus({ text: err.message || 'Xatolik yuz berdi', type: 'error' });
+    } finally {
+      setSettingWebhook(false);
+    }
+  };
+
+  const handleSendFinancialReportToBot = async () => {
+    const targetChatId = botConfig.chatId || (telegramUser?.id ? String(telegramUser.id) : '');
+    if (!targetChatId) {
+      setReportStatus({
+        text: 'Natijalarni Telegramda olish uchun: iltimos, pastdagi "Sozlamalar" bo‘limida Telegram Chat ID kiriting yoki botga /start yuboring.',
+        type: 'error',
+      });
+      return;
+    }
+    setSendingReport(true);
+    setReportStatus(null);
+
+    const totalIncome = transactions
+      .filter((t) => t.type === 'income')
+      .reduce((s, t) => s + t.amount, 0);
+    const totalExpense = transactions
+      .filter((t) => t.type === 'expense')
+      .reduce((s, t) => s + t.amount, 0);
+
+    const categoryMap: Record<string, number> = {};
+    transactions
+      .filter((t) => t.type === 'expense')
+      .forEach((t) => {
+        categoryMap[t.category] = (categoryMap[t.category] || 0) + t.amount;
+      });
+
+    const topCategories = Object.entries(categoryMap)
+      .map(([name, value]) => ({
+        name,
+        value,
+        percentage: totalExpense > 0 ? Number(((value / totalExpense) * 100).toFixed(1)) : 0,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    try {
+      const res = await sendFinancialReportViaServer({
+        chatId: targetChatId,
+        balance,
+        totalIncome,
+        totalExpense,
+        topCategories,
+        period: 'Joriy oy',
+      });
+
+      if (res.ok) {
+        setReportStatus({
+          text: `Moliyaviy va Donut tahlili natijalari @${botConfig.botUsername || DEFAULT_TELEGRAM_BOT_USERNAME} orqali Telegramingizga yuborildi!`,
+          type: 'success',
+        });
+        triggerHaptic('success');
+      } else {
+        setReportStatus({
+          text: res.error || 'Telegramga yuborishda xatolik yuz berdi',
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      setReportStatus({ text: err.message || 'Xatolik yuz berdi', type: 'error' });
+    } finally {
+      setSendingReport(false);
     }
   };
 
@@ -383,6 +506,68 @@ export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
                 <span>Haptic (Tebranish) sinash</span>
               </button>
             </div>
+          </div>
+
+          {/* Action Card: Real-time report to @SarhisobMoliya_bot */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Bot className="w-4 h-4 text-sky-400" />
+                  <span>@SarhisobMoliya_bot — Jonli Natijalarni Botda Chiqarish</span>
+                </h4>
+                <p className="text-xs text-slate-400">
+                  Joriy balans, tovarlar ro'yxati va Donut tahlili natijalarini to'g'ridan-to'g'ri Telegram botingizga yuboring yoki bot xabarlarini avtomatlashtiring.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  onClick={handleAutoSetWebhook}
+                  disabled={settingWebhook}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
+                  title="Telegram webhook ulanishini avtomatik sozlash"
+                >
+                  {settingWebhook ? <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-400" /> : <RefreshCw className="w-3.5 h-3.5 text-sky-400" />}
+                  <span>Webhook-ni Faollashtirish</span>
+                </button>
+
+                <button
+                  onClick={handleSendFinancialReportToBot}
+                  disabled={sendingReport}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-emerald-950 active:scale-95"
+                >
+                  {sendingReport ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  <span>Natijalarni Botga Yuborish</span>
+                </button>
+              </div>
+            </div>
+
+            {reportStatus && (
+              <div
+                className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
+                  reportStatus.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                }`}
+              >
+                {reportStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+                <span>{reportStatus.text}</span>
+              </div>
+            )}
+
+            {webhookStatus && (
+              <div
+                className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
+                  webhookStatus.type === 'success'
+                    ? 'bg-sky-500/10 border-sky-500/30 text-sky-400'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                }`}
+              >
+                {webhookStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+                <span>{webhookStatus.text}</span>
+              </div>
+            )}
           </div>
 
           {/* Setup Guide: 2 Easy Ways to set up in BotFather */}
