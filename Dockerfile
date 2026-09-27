@@ -1,40 +1,48 @@
 # Multi-stage Dockerfile for Sarhisob AI
-FROM node:20-alpine AS builder
+
+FROM oven/bun:1 AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests
-COPY package*.json ./
+# Dependency manifests
+COPY package.json bun.lock ./
 
-# Install all dependencies
-RUN npm ci
+# Install dependencies
+RUN bun install --frozen-lockfile
 
 # Copy source files
 COPY . .
 
 # Build Vite client
-RUN npm run build
+RUN bun run build
+
 
 # Production runtime stage
-FROM node:20-alpine AS runner
+FROM oven/bun:1-slim AS runner
 
 WORKDIR /app
+
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install production dependencies only
-COPY package*.json ./
-RUN npm ci --omit=dev
+# Dependency manifests
+COPY package.json bun.lock ./
 
-# Copy build artifacts and server code
+# Install production dependencies
+RUN bun install --frozen-lockfile --production
+
+# Copy build artifacts
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/server.ts ./server.ts
-COPY --from=builder /app/firebase-applet-config.json ./firebase-applet-config.json
-COPY --from=builder /app/public ./public
 
-# Install tsx globally for direct TypeScript execution in container
-RUN npm install -g tsx
+# Copy server
+COPY --from=builder /app/server.ts ./server.ts
+
+# Copy Firebase configuration
+COPY --from=builder /app/firebase-applet-config.json ./firebase-applet-config.json
+
+# Copy public files
+COPY --from=builder /app/public ./public
 
 EXPOSE 3000
 
-CMD ["tsx", "server.ts"]
+CMD ["bun", "run", "server.ts"]
