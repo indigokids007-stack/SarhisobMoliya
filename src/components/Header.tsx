@@ -31,6 +31,7 @@ interface HeaderProps {
   onOpenAuth: () => void;
   onOpenVPSModal: () => void;
   criticalIssuesCount?: number;
+  onLoginAsAdmin?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -43,8 +44,16 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAuth,
   onOpenVPSModal,
   criticalIssuesCount = 0,
+  onLoginAsAdmin,
 }) => {
   const isAdmin = currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+  const handleAdminDirectClick = () => {
+    if (!isAdmin && onLoginAsAdmin) {
+      onLoginAsAdmin();
+    }
+    setActiveTab('admin');
+  };
 
   const navItems: { 
     id: ActiveTab; 
@@ -129,6 +138,18 @@ export const Header: React.FC<HeaderProps> = ({
               <Server className="w-4 h-4 text-blue-400" />
               <span className="hidden md:inline">VPS Server</span>
             </button>
+
+            {/* Quick Admin Access Button if not admin */}
+            {!isAdmin && (
+              <button
+                onClick={handleAdminDirectClick}
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-bold text-amber-300 bg-amber-950/60 hover:bg-amber-900/60 border border-amber-500/40 rounded-xl transition-all shadow-sm shadow-amber-950/50"
+                title="Bosh Admin sifatida kirish (indigokids007@gmail.com)"
+              >
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                <span className="hidden sm:inline">Admin Kirish</span>
+              </button>
+            )}
 
             {/* Add Transaction Button */}
             <button

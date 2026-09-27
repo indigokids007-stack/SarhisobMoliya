@@ -48,8 +48,15 @@ export default function App() {
   const [isVPSModalOpen, setIsVPSModalOpen] = useState(false);
   const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
 
-  // Authentication State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  // Authentication State with persistent storage
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try {
+      const saved = localStorage.getItem('sarhisob_current_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   // Persistent Users list
@@ -99,14 +106,86 @@ export default function App() {
     }
   });
 
+  // Save currentUser to localStorage whenever it changes
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem(
+        'sarhisob_current_user',
+        JSON.stringify({
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          photoURL: currentUser.photoURL,
+        })
+      );
+    } else {
+      localStorage.removeItem('sarhisob_current_user');
+    }
+  }, [currentUser]);
+
+  // Dedicated Admin Login Handler (Instant 1-Click Access)
+  const handleLoginAsAdmin = () => {
+    const adminUser = {
+      uid: 'admin-indigo',
+      email: ADMIN_EMAIL,
+      displayName: 'IndigoKids (Bosh Administrator)',
+      photoURL: null,
+      emailVerified: true,
+      isAnonymous: false,
+    } as unknown as User;
+    setCurrentUser(adminUser);
+    setAccessToken('admin-token');
+    localStorage.setItem(
+      'sarhisob_current_user',
+      JSON.stringify({
+        uid: 'admin-indigo',
+        email: ADMIN_EMAIL,
+        displayName: 'IndigoKids (Bosh Administrator)',
+        role: 'admin',
+      })
+    );
+  };
+
+  const handleLoginWithEmail = (email: string, displayName?: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    const isAdmin = cleanEmail === ADMIN_EMAIL.toLowerCase();
+    const name = displayName || (isAdmin ? 'IndigoKids (Bosh Administrator)' : cleanEmail.split('@')[0]);
+    const userObj = {
+      uid: `user-${Date.now()}`,
+      email: cleanEmail,
+      displayName: name,
+      photoURL: null,
+      emailVerified: true,
+      isAnonymous: false,
+    } as unknown as User;
+    setCurrentUser(userObj);
+    setAccessToken(isAdmin ? 'admin-token' : 'user-token');
+    localStorage.setItem(
+      'sarhisob_current_user',
+      JSON.stringify({
+        uid: userObj.uid,
+        email: cleanEmail,
+        displayName: name,
+        role: isAdmin ? 'admin' : 'user',
+      })
+    );
+  };
+
+  const handleGrantAdminAccess = (email: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.email.toLowerCase() === cleanEmail ? { ...u, role: 'admin' as const } : u
+      )
+    );
+  };
+
   // Initialize Firebase Auth listener on mount
   useEffect(() => {
     const unsubscribe = initAuth((user) => {
-      setCurrentUser(user);
       if (user) {
+        setCurrentUser(user);
         setAccessToken(getCachedOAuthToken());
-      } else {
-        setAccessToken(null);
       }
     });
     return () => {
@@ -339,6 +418,7 @@ export default function App() {
         onOpenAuth={() => setIsAuthModalOpen(true)}
         onOpenVPSModal={() => setIsVPSModalOpen(true)}
         criticalIssuesCount={criticalCount}
+        onLoginAsAdmin={handleLoginAsAdmin}
       />
 
       {/* Main Content Viewport */}
@@ -390,6 +470,9 @@ export default function App() {
             onDeleteTransaction={handleDeleteTransaction}
             onOpenGoogleSheets={() => setActiveTab('sheets')}
             onOpenAuth={() => setIsAuthModalOpen(true)}
+            onLoginAsAdmin={handleLoginAsAdmin}
+            onLoginWithEmail={handleLoginWithEmail}
+            onGrantAdminAccess={handleGrantAdminAccess}
           />
         )}
 
@@ -493,6 +576,8 @@ export default function App() {
           setCurrentUser(user);
           setAccessToken(token || null);
         }}
+        onLoginAsAdmin={handleLoginAsAdmin}
+        onLoginWithEmail={handleLoginWithEmail}
       />
 
       <VPSDeploymentModal
