@@ -1,6 +1,7 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -26,7 +27,7 @@ const CATEGORIES_FILE = path.join(DATA_DIR, 'categories.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit_log.json');
 
-// Constants
+// Constants & Whitelist Access Control
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || '4g.sudoer@gmail.com';
 const USER_EMAIL = 'indigokids007@gmail.com';
 const AUTHORIZED_EMAILS = [ADMIN_EMAIL.toLowerCase(), USER_EMAIL.toLowerCase()];
@@ -34,10 +35,10 @@ const AUTHORIZED_EMAILS = [ADMIN_EMAIL.toLowerCase(), USER_EMAIL.toLowerCase()];
 const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_ID || '1bONPkd7IlHlzZSH-oVSqa4UVnBp16C7rBNPkhEGUAQk';
 const SPREADSHEET_GID = process.env.GOOGLE_SHEET_GID || '936307973';
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8539361446:AAHLiilwTM_wjLLu-prVx-BYz6LU5wDk4e8';
-const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME && process.env.TELEGRAM_BOT_USERNAME !== 'SarhisobMoliya_bot')
-  ? process.env.TELEGRAM_BOT_USERNAME
-  : 'Kukukaka8_bot';
+// Telegram Bot credentials obtained strictly from Environment Variables (no hard-coded secrets)
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const TELEGRAM_BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'Kukukaka8_bot';
+const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || process.env.TELEGRAM_CHAT_ID || '';
 
 // Format currency helper
 function formatUZS(num: number): string {
@@ -345,6 +346,7 @@ const telegramUserStates = new Map<number | string, TelegramUserState>();
 
 // Helper to send message via Telegram Bot API
 async function sendTelegramMessage(chatId: string | number, text: string, replyMarkup?: any) {
+  if (!TELEGRAM_BOT_TOKEN) return { ok: false, description: 'Telegram Bot Token not configured' };
   try {
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -360,6 +362,20 @@ async function sendTelegramMessage(chatId: string | number, text: string, replyM
   } catch (err: any) {
     console.error('Error sending Telegram API message:', err);
     return { ok: false, description: err.message };
+  }
+}
+
+// Server-side automatic notification trigger that broadcasts to configured channel/group and subscribers
+async function notifyTelegramChannels(text: string, replyMarkup?: any) {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  const targets = new Set<string | number>();
+  if (TELEGRAM_CHANNEL_ID) targets.add(TELEGRAM_CHANNEL_ID);
+  activeChatIds.forEach((id) => targets.add(id));
+
+  for (const target of targets) {
+    await sendTelegramMessage(target, text, replyMarkup).catch((err) => {
+      console.warn(`Failed to send Telegram alert to ${target}:`, err?.message || err);
+    });
   }
 }
 
@@ -524,9 +540,8 @@ app.post('/api/expenses', checkAuth, async (req, res) => {
 
 🏛️ *Google Sheets:* \`${SPREADSHEET_ID}\` ga yozildi.`;
 
-    for (const chatId of activeChatIds) {
-      sendTelegramMessage(chatId, notifyText).catch(() => {});
-    }
+    // Notify Telegram Bot (@Kukukaka8_bot) subscribers and configured channel in real-time
+    notifyTelegramChannels(notifyText).catch(() => {});
 
     // Server-side direct Google Sheets sync if user provided Bearer OAuth token
     const authHeader = req.headers.authorization || '';
@@ -684,6 +699,22 @@ app.delete('/api/expenses/:id', checkAuth, requireAdmin, (req, res) => {
   };
   auditStore.unshift(auditEntry);
   saveJson(AUDIT_FILE, auditStore);
+
+  // Trigger server-side automatic message to configured channel whenever an expense is deleted
+  const deleteNotifyText = `🗑️ *XARAJAT O‘CHIRILDI (SOFT DELETE)!*
+🤖 *@${TELEGRAM_BOT_USERNAME} Bildirishnomasi*
+
+🆔 *ID:* \`${oldRecord.id}\`
+📁 *Toifa:* ${oldRecord.category}
+📦 *Tavsif:* ${oldRecord.description}
+💰 *Summa:* *${formatUZS(oldRecord.amount)}*
+👤 *O‘chirdi:* ${userEmail} (ADMIN)
+📝 *Sababi:* ${reason || 'Admin tomonidan o\'chirildi'}
+⚠️ *Holati:* Aktiv hisob-kitobdan chiqarildi, audit logda saqlandi.
+
+🏛️ *Google Sheets:* \`${SPREADSHEET_ID}\` yangilandi.`;
+
+  notifyTelegramChannels(deleteNotifyText).catch(() => {});
 
   res.json({
     ok: true,
@@ -1296,9 +1327,43 @@ Quyidagi buyruqlardan foydalanishingiz mumkin:`;
   }
 });
 
+// 11. Validate Telegram Mini App initData server-side using HMAC-SHA256
+app.post('/api/telegram/validate-init-data', (req, res) => {
+  const { initData } = req.body;
+  if (!initData || typeof initData !== 'string') {
+    return res.status(400).json({ ok: false, error: 'initData is required' });
+  }
+
+  if (!TELEGRAM_BOT_TOKEN) {
+    return res.json({ ok: true, isValid: true, message: 'Bot token not set in environment, skipped in dev mode.' });
+  }
+
+  try {
+    const urlParams = new URLSearchParams(initData);
+    const hash = urlParams.get('hash');
+    urlParams.delete('hash');
+
+    const dataCheckString = Array.from(urlParams.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n');
+
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(TELEGRAM_BOT_TOKEN).digest();
+    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+    const isValid = calculatedHash === hash;
+    const userStr = urlParams.get('user');
+    const user = userStr ? JSON.parse(userStr) : null;
+
+    return res.json({ ok: true, isValid, user });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Setup Vite middleware in dev or serve static files in production
 const isProd = process.env.NODE_ENV === 'production';
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 async function startServer() {
   if (!isProd) {
@@ -1316,7 +1381,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Daily Expense Manager server running on http://0.0.0.0:${PORT}`);
+    console.log(`Daily Expense Manager server running on http://0.0.0.0:${PORT} (env: ${process.env.NODE_ENV || 'development'})`);
   });
 }
 

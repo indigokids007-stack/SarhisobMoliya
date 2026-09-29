@@ -1,7 +1,7 @@
 import { Transaction } from '../types';
 
-export const DEFAULT_TELEGRAM_BOT_TOKEN = '8539361446:AAHLiilwTM_wjLLu-prVx-BYz6LU5wDk4e8';
-export const DEFAULT_TELEGRAM_BOT_USERNAME = 'SarhisobMoliya_bot';
+export const DEFAULT_TELEGRAM_BOT_TOKEN = '';
+export const DEFAULT_TELEGRAM_BOT_USERNAME = 'Kukukaka8_bot';
 
 export interface TelegramBotConfig {
   botToken: string;
@@ -16,21 +16,20 @@ export interface TelegramBotConfig {
 }
 
 /**
- * Validates a Telegram Bot Token by calling getMe API
+ * Validates a Telegram Bot Token by calling server proxy
  */
 export async function testTelegramBotToken(botToken?: string): Promise<{
   ok: boolean;
   bot?: { id: number; is_bot: boolean; first_name: string; username: string };
   description?: string;
 }> {
-  const token = (botToken || DEFAULT_TELEGRAM_BOT_TOKEN).trim();
   try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const res = await fetch('/api/telegram/bot-info');
     const data = await res.json();
     if (data.ok) {
-      return { ok: true, bot: data.result };
+      return { ok: true, bot: data.bot };
     }
-    return { ok: false, description: data.description || 'Token noto\'g\'ri' };
+    return { ok: false, description: data.error || 'Token noto\'g\'ri' };
   } catch (err: any) {
     return { ok: false, description: err.message || 'Telegram serveriga ulanishda xatolik' };
   }

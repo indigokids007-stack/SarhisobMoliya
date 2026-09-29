@@ -1,5 +1,24 @@
 [
   {
+    "id": "AUD-1790697411699",
+    "action": "DELETE",
+    "expenseId": "EXP-2026-000012",
+    "oldValue": "{\"amount\":350000,\"category\":\"Equipment\",\"description\":\"Keyboard and mouse set\"}",
+    "newValue": "{\"status\":\"DELETED\",\"deletedBy\":\"4g.sudoer@gmail.com\",\"reason\":\"Testing deletion notification trigger\"}",
+    "userEmail": "4g.sudoer@gmail.com",
+    "timestamp": "2026-09-29T15:56:51.699Z",
+    "reason": "Testing deletion notification trigger"
+  },
+  {
+    "id": "AUD-1790697402844",
+    "action": "CREATE",
+    "expenseId": "EXP-2026-000012",
+    "newValue": "{\"amount\":350000,\"category\":\"Equipment\",\"description\":\"Keyboard and mouse set\",\"date\":\"2026-09-29\"}",
+    "userEmail": "4g.sudoer@gmail.com",
+    "timestamp": "2026-09-29T15:56:42.844Z",
+    "reason": "New expense added"
+  },
+  {
     "id": "AUD-1790695603412",
     "action": "RESTORE",
     "expenseId": "EXP-2026-000011",

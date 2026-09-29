@@ -1,5 +1,27 @@
 [
   {
+    "id": "EXP-2026-000012",
+    "date": "2026-09-29",
+    "time": "15:56",
+    "month": "Outside Period",
+    "category": "Equipment",
+    "description": "Keyboard and mouse set",
+    "amount": 350000,
+    "currency": "UZS",
+    "paymentMethod": "Bank card",
+    "responsiblePerson": "Akbar",
+    "comment": "",
+    "receiptUrl": "",
+    "createdBy": "4g.sudoer@gmail.com",
+    "createdAt": "2026-09-29T15:56:42.844Z",
+    "updatedAt": "2026-09-29T15:56:51.699Z",
+    "status": "DELETED",
+    "syncStatus": "synced",
+    "deletedAt": "2026-09-29T15:56:51.699Z",
+    "deletedBy": "4g.sudoer@gmail.com",
+    "deletionReason": "Testing deletion notification trigger"
+  },
+  {
     "id": "EXP-2026-000011",
     "date": "2026-09-29",
     "time": "15:26",

@@ -1,48 +1,40 @@
-# Multi-stage Dockerfile for Sarhisob AI
-
-FROM oven/bun:1 AS builder
+# Multi-stage Dockerfile for Daily Expense Manager (Cloud Run)
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Dependency manifests
-COPY package.json bun.lock ./
+# Copy dependency manifests
+COPY package*.json ./
 
-# Install dependencies
-RUN bun install --frozen-lockfile
+# Install dependencies for building
+RUN npm install
 
-# Copy source files
+# Copy source code
 COPY . .
 
-# Build Vite client
-RUN bun run build
-
+# Build frontend production bundle (Vite)
+RUN npm run build
 
 # Production runtime stage
-FROM oven/bun:1-slim AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
-
-# Dependency manifests
-COPY package.json bun.lock ./
+ENV PORT=8080
 
 # Install production dependencies
-RUN bun install --frozen-lockfile --production
+COPY package*.json ./
+RUN npm install --omit=dev
 
-# Copy build artifacts
+# Copy compiled assets and server
 COPY --from=builder /app/dist ./dist
-
-# Copy server
 COPY --from=builder /app/server.ts ./server.ts
-
-# Copy Firebase configuration
 COPY --from=builder /app/firebase-applet-config.json ./firebase-applet-config.json
-
-# Copy public files
 COPY --from=builder /app/public ./public
 
-EXPOSE 3000
+# Cloud Run dynamic port
+EXPOSE 8080
 
-CMD ["bun", "run", "server.ts"]
+# Start production server
+CMD ["node", "server.ts"]
