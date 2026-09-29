@@ -7,8 +7,8 @@ import { ADMIN_EMAIL } from '../types';
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentUser: User | null;
-  onAuthChange: (user: User | null, token?: string) => void;
+  currentUser: any;
+  onAuthChange: (user: any, token?: string) => void;
   onLoginAsAdmin?: () => void;
   onLoginWithEmail?: (email: string, displayName?: string) => void;
 }

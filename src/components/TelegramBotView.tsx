@@ -1,1046 +1,417 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
-  Send, 
   Bot, 
-  Check, 
-  CheckCheck, 
-  Sparkles, 
-  Paperclip, 
-  Mic, 
-  Settings, 
-  Copy, 
-  ExternalLink,
-  Loader2,
-  RefreshCw,
-  Info,
-  CheckCircle2,
-  AlertCircle,
-  Radio,
-  Smartphone,
-  MessageSquare,
-  Share2,
-  Vibrate,
-  ShieldCheck,
-  ChevronRight,
-  Flame,
-  ArrowUpRight,
-  ArrowDownRight,
-  Clock,
-  Calendar
+  Send, 
+  ExternalLink, 
+  CheckCircle2, 
+  Smartphone, 
+  RefreshCw, 
+  Zap,
+  Layers,
+  FileSpreadsheet
 } from 'lucide-react';
-import { TelegramChatMessage, Transaction } from '../types';
-import { sendTelegramMessage } from '../services/api';
-import { 
-  testTelegramBotToken, 
-  sendTelegramNotification, 
-  setTelegramBotWebhook,
-  sendFinancialReportViaServer,
-  DEFAULT_TELEGRAM_BOT_TOKEN,
-  DEFAULT_TELEGRAM_BOT_USERNAME,
-  TelegramBotConfig 
-} from '../services/telegramService';
-import { formatUZS, formatDateUz } from '../utils/formatters';
-import { 
-  isRunningInTelegram, 
-  getTelegramUser, 
-  triggerHaptic, 
-  initTelegramWebApp 
-} from '../lib/telegramWebApp';
-import { getTransactionTimeString } from '../utils/csvExport';
+import { DEFAULT_TELEGRAM_BOT_USERNAME, SPREADSHEET_ID, Expense } from '../types';
+import { formatUZS } from '../utils/formatters';
 
 interface TelegramBotViewProps {
-  messages: TelegramChatMessage[];
-  onSendMessage: (msg: TelegramChatMessage) => void;
-  onAddTransactionFromBot: (tx: Omit<Transaction, 'id'>) => void;
-  transactions: Transaction[];
-  balance: number;
+  expenses: Expense[];
+  onAddExpenseDirect: (exp: Partial<Expense>) => Promise<void>;
 }
 
 export const TelegramBotView: React.FC<TelegramBotViewProps> = ({
-  messages,
-  onSendMessage,
-  onAddTransactionFromBot,
-  transactions,
-  balance,
+  expenses,
+  onAddExpenseDirect,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'chat' | 'miniapp' | 'settings'>('miniapp');
-  const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
-  const [isWebhookCopied, setIsWebhookCopied] = useState(false);
-  
-  // Real Telegram bot states
-  const [botConfig, setBotConfig] = useState<TelegramBotConfig>(() => {
+  const [chatIdInput, setChatIdInput] = useState('');
+  const [registerStatus, setRegisterStatus] = useState<string | null>(null);
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  // Mini App Simulator Chat
+  const [simStep, setSimStep] = useState<'idle' | 'amount' | 'category' | 'description' | 'payment' | 'confirm'>('idle');
+  const [simAmount, setSimAmount] = useState('150000');
+  const [simCategory, setSimCategory] = useState('Food');
+  const [simDescription, setSimDescription] = useState('Office groceries & snacks');
+  const [simPayment, setSimPayment] = useState('Cash');
+  const [simMessages, setSimMessages] = useState<Array<{ sender: 'bot' | 'user'; text: string; buttons?: string[] }>>([
+    {
+      sender: 'bot',
+      text: `👋 Assalomu alaykum! Daily Expense Manager botiga xush kelibsiz.
+
+Google Sheets: \`${SPREADSHEET_ID}\`
+Quyidagi tugmalar orqali xarajat kiritishingiz mumkin:`,
+      buttons: ['➕ Add Expense', '📊 Dashboard', '📅 Monthly Monitoring', '📜 History'],
+    },
+  ]);
+
+  const handleRegisterChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatIdInput.trim()) return;
+    setIsRegistering(true);
+    setRegisterStatus(null);
     try {
-      const saved = localStorage.getItem('sarhisob_telegram_config');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return {
-          botToken: parsed.botToken || DEFAULT_TELEGRAM_BOT_TOKEN,
-          chatId: parsed.chatId || '',
-          botUsername: parsed.botUsername || DEFAULT_TELEGRAM_BOT_USERNAME,
-          botFirstName: parsed.botFirstName || 'Sarhisob Moliya',
-          isConnected: true,
-        };
-      }
-      return {
-        botToken: DEFAULT_TELEGRAM_BOT_TOKEN,
-        chatId: '',
-        botUsername: DEFAULT_TELEGRAM_BOT_USERNAME,
-        botFirstName: 'Sarhisob Moliya',
-        isConnected: true,
-      };
-    } catch {
-      return {
-        botToken: DEFAULT_TELEGRAM_BOT_TOKEN,
-        chatId: '',
-        botUsername: DEFAULT_TELEGRAM_BOT_USERNAME,
-        botFirstName: 'Sarhisob Moliya',
-        isConnected: true,
-      };
-    }
-  });
-
-  const [testingToken, setTestingToken] = useState(false);
-  const [tokenStatus, setTokenStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-  const [sendingTestNotify, setSendingTestNotify] = useState(false);
-  const [notifyStatus, setNotifyStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-  const [settingWebhook, setSettingWebhook] = useState(false);
-  const [webhookStatus, setWebhookStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-  const [sendingReport, setSendingReport] = useState(false);
-  const [reportStatus, setReportStatus] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-
-  // Telegram WebApp detection
-  const isInsideTelegram = isRunningInTelegram();
-  const telegramUser = getTelegramUser();
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    initTelegramWebApp();
-  }, []);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    if (activeSubTab === 'chat') {
-      scrollToBottom();
-    }
-  }, [messages, isLoading, activeSubTab]);
-
-  const miniAppUrl = typeof window !== 'undefined' ? window.location.origin : 'https://sarhisob-moliya.web.app';
-
-  const copyMiniAppUrl = () => {
-    navigator.clipboard.writeText(miniAppUrl);
-    setIsCopied(true);
-    triggerHaptic('success');
-    setTimeout(() => setIsCopied(false), 2200);
-  };
-
-  const copyWebhookUrl = () => {
-    const url = `${window.location.origin}/api/telegram/webhook`;
-    navigator.clipboard.writeText(url);
-    setIsWebhookCopied(true);
-    triggerHaptic('success');
-    setTimeout(() => setIsWebhookCopied(false), 2200);
-  };
-
-  const handleTestBotToken = async () => {
-    if (!botConfig.botToken.trim()) {
-      setTokenStatus({ text: 'Iltimos, Bot Token kiriting', type: 'error' });
-      return;
-    }
-    setTestingToken(true);
-    setTokenStatus(null);
-    try {
-      const res = await testTelegramBotToken(botConfig.botToken);
-      if (res.ok && res.bot) {
-        const updated = {
-          ...botConfig,
-          botUsername: res.bot.username,
-          botFirstName: res.bot.first_name,
-          isConnected: true,
-          lastTestedAt: new Date().toISOString(),
-        };
-        setBotConfig(updated);
-        localStorage.setItem('sarhisob_telegram_config', JSON.stringify(updated));
-        setTokenStatus({
-          text: `Muvaffaqiyatli ulandi! Bot: @${res.bot.username} (${res.bot.first_name})`,
-          type: 'success',
-        });
-        triggerHaptic('success');
-      } else {
-        setTokenStatus({ text: res.description || 'Token noto\'g\'ri', type: 'error' });
-      }
-    } catch (err: any) {
-      setTokenStatus({ text: err.message || 'Xatolik yuz berdi', type: 'error' });
-    } finally {
-      setTestingToken(false);
-    }
-  };
-
-  const handleSendLiveNotification = async () => {
-    if (!botConfig.botToken || !botConfig.chatId) {
-      setNotifyStatus({ text: 'Bot Token va Chat ID to\'ldirilishi shart', type: 'error' });
-      return;
-    }
-    setSendingTestNotify(true);
-    setNotifyStatus(null);
-    try {
-      const text = `🔔 *Sarhisob AI Moliyaviy Xabar*\n\n💰 *Joriy balans:* ${formatUZS(balance)}\n📊 *Tranzaksiyalar soni:* ${transactions.length} ta\n📱 *Mini App URL:* ${miniAppUrl}\n\n✅ Tizim va bot muvaffaqiyatli integratsiya qilindi!`;
-      const res = await sendTelegramNotification(botConfig.botToken, botConfig.chatId, text);
-      if (res.ok) {
-        setNotifyStatus({ text: 'Xabar Telegramga muvaffaqiyatli yetkazildi!', type: 'success' });
-        triggerHaptic('success');
-      } else {
-        setNotifyStatus({ text: res.description || 'Telegram xatosi', type: 'error' });
-      }
-    } catch (err: any) {
-      setNotifyStatus({ text: err.message || 'Xatolik', type: 'error' });
-    } finally {
-      setSendingTestNotify(false);
-    }
-  };
-
-  const handleAutoSetWebhook = async () => {
-    setSettingWebhook(true);
-    setWebhookStatus(null);
-    try {
-      const webhookUrl = `${window.location.origin}/api/telegram/webhook`;
-      const res = await fetch('/api/telegram/set-webhook', {
+      const res = await fetch('/api/telegram/register-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webhookUrl }),
+        body: JSON.stringify({ chatId: chatIdInput.trim() }),
       });
       const data = await res.json();
       if (data.ok) {
-        setWebhookStatus({
-          text: `Webhook muvaffaqiyatli ulandi! Endi @${botConfig.botUsername || DEFAULT_TELEGRAM_BOT_USERNAME} botiga Telegramda yozilgan har qanday xabarga jonli javob qaytariladi.`,
-          type: 'success',
-        });
-        triggerHaptic('success');
+        setRegisterStatus(`Chat ID ${chatIdInput} registered successfully. Real-time expense notifications active!`);
       } else {
-        setWebhookStatus({
-          text: data.result?.description || data.error || 'Webhook o\'rnatishda xatolik',
-          type: 'error',
-        });
+        setRegisterStatus(data.error || 'Failed to register Chat ID');
       }
     } catch (err: any) {
-      setWebhookStatus({ text: err.message || 'Xatolik yuz berdi', type: 'error' });
+      setRegisterStatus(err.message);
     } finally {
-      setSettingWebhook(false);
+      setIsRegistering(false);
     }
   };
 
-  const handleSendFinancialReportToBot = async () => {
-    const targetChatId = botConfig.chatId || (telegramUser?.id ? String(telegramUser.id) : '');
-    if (!targetChatId) {
-      setReportStatus({
-        text: 'Natijalarni Telegramda olish uchun: iltimos, pastdagi "Sozlamalar" bo‘limida Telegram Chat ID kiriting yoki botga /start yuboring.',
-        type: 'error',
-      });
+  const handleSimulateButtonClick = async (btn: string) => {
+    if (btn === '➕ Add Expense') {
+      setSimMessages((prev) => [
+        ...prev,
+        { sender: 'user', text: '➕ Add Expense' },
+        { sender: 'bot', text: '💰 Enter expense amount in UZS:\n(e.g., 150000)' },
+      ]);
+      setSimStep('amount');
       return;
     }
-    setSendingReport(true);
-    setReportStatus(null);
 
-    const totalIncome = transactions
-      .filter((t) => t.type === 'income')
-      .reduce((s, t) => s + t.amount, 0);
-    const totalExpense = transactions
-      .filter((t) => t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
+    if (btn === '📊 Dashboard') {
+      const total = expenses.filter(e => e.status === 'ACTIVE').reduce((s, e) => s + e.amount, 0);
+      setSimMessages((prev) => [
+        ...prev,
+        { sender: 'user', text: '📊 Dashboard' },
+        { sender: 'bot', text: `📊 Daily Expense Manager Dashboard:\n\n💰 3-Month Total: *${formatUZS(total)}*\n📦 Transactions: *${expenses.length}*\n🏛️ Sheets ID: ${SPREADSHEET_ID}` },
+      ]);
+      return;
+    }
 
-    const categoryMap: Record<string, number> = {};
-    transactions
-      .filter((t) => t.type === 'expense')
-      .forEach((t) => {
-        categoryMap[t.category] = (categoryMap[t.category] || 0) + t.amount;
-      });
+    if (btn === '📅 Monthly Monitoring') {
+      setSimMessages((prev) => [
+        ...prev,
+        { sender: 'user', text: '📅 Monthly Monitoring' },
+        { sender: 'bot', text: `📅 3-Month Breakdown:\n\n• Month 1: Active\n• Month 2: Scheduled\n• Month 3: Scheduled` },
+      ]);
+      return;
+    }
 
-    const topCategories = Object.entries(categoryMap)
-      .map(([name, value]) => ({
-        name,
-        value,
-        percentage: totalExpense > 0 ? Number(((value / totalExpense) * 100).toFixed(1)) : 0,
-      }))
-      .sort((a, b) => b.value - a.value);
-
-    try {
-      const res = await sendFinancialReportViaServer({
-        chatId: targetChatId,
-        balance,
-        totalIncome,
-        totalExpense,
-        topCategories,
-        period: 'Joriy oy',
-      });
-
-      if (res.ok) {
-        setReportStatus({
-          text: `Moliyaviy va Donut tahlili natijalari @${botConfig.botUsername || DEFAULT_TELEGRAM_BOT_USERNAME} orqali Telegramingizga yuborildi!`,
-          type: 'success',
-        });
-        triggerHaptic('success');
-      } else {
-        setReportStatus({
-          text: res.error || 'Telegramga yuborishda xatolik yuz berdi',
-          type: 'error',
-        });
-      }
-    } catch (err: any) {
-      setReportStatus({ text: err.message || 'Xatolik yuz berdi', type: 'error' });
-    } finally {
-      setSendingReport(false);
+    if (btn === '📜 History') {
+      const last = expenses.slice(0, 3).map((e, i) => `${i + 1}. ${e.date} - ${e.category}: ${formatUZS(e.amount)} (${e.description})`).join('\n');
+      setSimMessages((prev) => [
+        ...prev,
+        { sender: 'user', text: '📜 History' },
+        { sender: 'bot', text: `📜 Recent Transactions:\n\n${last}` },
+      ]);
+      return;
     }
   };
 
-  const handleSend = async (customText?: string) => {
-    const textToSend = customText || inputText;
-    if (!textToSend.trim() || isLoading) return;
-
-    triggerHaptic('light');
-
-    const userMsg: TelegramChatMessage = {
-      id: `msg-${Date.now()}`,
-      sender: 'user',
-      text: textToSend.trim(),
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    onSendMessage(userMsg);
-    if (!customText) setInputText('');
-    setIsLoading(true);
-
-    try {
-      const response = await sendTelegramMessage({
-        message: textToSend.trim(),
-        transactions,
-        balance,
-      });
-
-      const botMsg: TelegramChatMessage = {
-        id: `msg-${Date.now() + 1}`,
+  const handleSimulateSubmitAmount = () => {
+    setSimMessages((prev) => [
+      ...prev,
+      { sender: 'user', text: simAmount },
+      {
         sender: 'bot',
-        text: response.reply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        keyboard: response.keyboard,
-        detectedTransaction: response.detectedTransaction || undefined,
-      };
-
-      onSendMessage(botMsg);
-      triggerHaptic('medium');
-
-      // If a transaction was detected, automatically add it to the state!
-      if (response.detectedTransaction) {
-        onAddTransactionFromBot({
-          type: response.detectedTransaction.type,
-          amount: response.detectedTransaction.amount,
-          category: response.detectedTransaction.category,
-          description: response.detectedTransaction.description,
-          date: response.detectedTransaction.date || new Date().toISOString().split('T')[0],
-          time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false }),
-          paymentMethod: 'Humo/Uzcard',
-        });
-      }
-    } catch (err: any) {
-      const errorMsg: TelegramChatMessage = {
-        id: `msg-${Date.now() + 1}`,
-        sender: 'bot',
-        text: "Kechirasiz, xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      onSendMessage(errorMsg);
-    } finally {
-      setIsLoading(false);
-    }
+        text: `💰 Amount: *${formatUZS(Number(simAmount))}*\n\n👉 Choose expense category:`,
+        buttons: ['Food', 'Transport', 'Utilities', 'Equipment', 'Other'],
+      },
+    ]);
+    setSimStep('category');
   };
 
-  const quickSamples = [
-    '/balans',
-    '/hisobot',
-    '/prognoz',
-    '/tavsiya',
-    'Tushlik 45000 so\'m',
-    'Taksi 25000',
-    'Bozorlik 380 ming',
-    'Oylik maosh tushdi 8 000 000',
-  ];
+  const handleSimulateSelectCategory = (cat: string) => {
+    setSimCategory(cat);
+    setSimMessages((prev) => [
+      ...prev,
+      { sender: 'user', text: cat },
+      { sender: 'bot', text: `📁 Category: *${cat}*\n\n📝 Enter expense description:` },
+    ]);
+    setSimStep('description');
+  };
+
+  const handleSimulateSubmitDescription = () => {
+    setSimMessages((prev) => [
+      ...prev,
+      { sender: 'user', text: simDescription },
+      {
+        sender: 'bot',
+        text: `📝 Description: *${simDescription}*\n\n💳 Choose payment method:`,
+        buttons: ['Cash', 'Bank card', 'Bank transfer', 'Other'],
+      },
+    ]);
+    setSimStep('payment');
+  };
+
+  const handleSimulateSelectPayment = (pm: string) => {
+    setSimPayment(pm);
+    setSimMessages((prev) => [
+      ...prev,
+      { sender: 'user', text: pm },
+      {
+        sender: 'bot',
+        text: `🔍 Confirmation:\n\n📅 Date: ${new Date().toISOString().split('T')[0]}\n📁 Category: ${simCategory}\n💰 Amount: ${formatUZS(Number(simAmount))}\n📝 Description: ${simDescription}\n💳 Payment: ${pm}\n\nSave to Google Sheets?`,
+        buttons: ['✅ Confirm', '❌ Cancel'],
+      },
+    ]);
+    setSimStep('confirm');
+  };
+
+  const handleSimulateConfirm = async () => {
+    await onAddExpenseDirect({
+      amount: parseFloat(simAmount),
+      category: simCategory,
+      description: simDescription,
+      paymentMethod: simPayment as any,
+      date: new Date().toISOString().split('T')[0],
+      time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      createdBy: 'telegram@bot',
+    });
+
+    setSimMessages((prev) => [
+      ...prev,
+      { sender: 'user', text: '✅ Confirm' },
+      {
+        sender: 'bot',
+        text: `✅ Expense successfully recorded!\n\n💰 Amount: ${formatUZS(Number(simAmount))}\n📁 Category: ${simCategory}\n🏛️ Saved to Google Sheets (${SPREADSHEET_ID}).`,
+        buttons: ['➕ Add Expense', '📊 Dashboard', '📜 History'],
+      },
+    ]);
+    setSimStep('idle');
+  };
 
   return (
-    <div className="space-y-6">
-      {/* Top Telegram Header Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 rounded-2xl p-5">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-sky-500 flex items-center justify-center text-white shadow-lg shadow-sky-900/40">
-            <Bot className="w-6 h-6" />
+    <div className="space-y-6 max-w-5xl">
+      
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+              Telegram Bot & Mini App Integration
+            </h1>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-500/10 text-sky-400 border border-sky-500/30">
+              @{DEFAULT_TELEGRAM_BOT_USERNAME}
+            </span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-bold text-white">
-                @{botConfig.botUsername || 'SarhisobMoliyaBot'}
-              </h2>
-              <span className="text-[10px] font-bold text-sky-400 bg-sky-950 border border-sky-800 px-2 py-0.5 rounded">
-                Telegram & Mini App
-              </span>
-              {isInsideTelegram && (
-                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950 border border-emerald-800 px-2 py-0.5 rounded flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>TMA Faol</span>
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-slate-400">
-              Telegram boti va Telegram Mini App (TMA) orqali to'liq moliyaviy boshqaruv
-            </p>
-          </div>
+          <p className="text-xs sm:text-sm text-slate-400">
+            Bidirectional expense recording flow and Mini App execution for mobile accounting
+          </p>
         </div>
 
-        {/* Sub-tab navigation */}
-        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => {
-              setActiveSubTab('miniapp');
-              triggerHaptic('light');
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-              activeSubTab === 'miniapp'
-                ? 'bg-sky-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Smartphone className="w-3.5 h-3.5" />
-            <span>Mini App (TMA)</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveSubTab('chat');
-              triggerHaptic('light');
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-              activeSubTab === 'chat'
-                ? 'bg-sky-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <MessageSquare className="w-3.5 h-3.5" />
-            <span>Bot Chati</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveSubTab('settings');
-              triggerHaptic('light');
-            }}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-              activeSubTab === 'settings'
-                ? 'bg-sky-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span>Sozlamalar</span>
-          </button>
-        </div>
+        <a
+          href={`https://t.me/${DEFAULT_TELEGRAM_BOT_USERNAME}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs rounded-xl shadow-md transition active:scale-95"
+        >
+          <Bot className="w-4 h-4" />
+          <span>Open @{DEFAULT_TELEGRAM_BOT_USERNAME}</span>
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
       </div>
 
-      {/* 1. Telegram Mini App (TMA) Tab */}
-      {activeSubTab === 'miniapp' && (
-        <div className="space-y-6 animate-in fade-in">
-          {/* Status banner */}
-          <div className="bg-gradient-to-r from-sky-950/70 via-slate-900 to-slate-900 border border-sky-500/30 rounded-2xl p-5 sm:p-6 space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">
-                  <Smartphone className="w-3.5 h-3.5" />
-                  <span>Telegram Mini App (TMA) Tayyor</span>
-                </div>
-                <h3 className="text-lg sm:text-xl font-bold text-white">
-                  Telegram Bot Ichida To'liq Ishlovchi Mini App
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
-                  Foydalanuvchilar brauzerga chiqmasdan, to'g'ridan-to'g'ri Telegram ichida bir bosish bilan o'z moliyaviy hisobotlarini ko'rishi, xarajat kiritishi va tahlillarni ochishi mumkin.
-                </p>
+      {/* Grid: Bot Card & Interactive Simulator */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* LEFT: INTEGRATION CONFIGURATION & CHAT ID REGISTRATION */}
+        <div className="space-y-4">
+          
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <h3 className="text-sm font-semibold text-white">Bot Credentials & Configuration</h3>
+            
+            <div className="p-3 bg-slate-850 rounded-xl space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Bot Username:</span>
+                <span className="font-mono font-bold text-sky-400">@{DEFAULT_TELEGRAM_BOT_USERNAME}</span>
               </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  onClick={copyMiniAppUrl}
-                  className="flex items-center gap-1.5 px-4 py-2.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-lg shadow-sky-950 active:scale-95"
-                >
-                  {isCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  <span>{isCopied ? 'URL Nusxalandi!' : 'Mini App URL dan nusxa olish'}</span>
-                </button>
-
-                <a
-                  href={`https://t.me/${botConfig.botUsername || 'SarhisobMoliyaBot'}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs sm:text-sm font-semibold transition-all"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  <span>Telegramda ochish</span>
-                </a>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Environment Secret:</span>
+                <span className="font-mono text-slate-300">TELEGRAM_BOT_TOKEN</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Database Connection:</span>
+                <span className="font-mono text-emerald-400">Google Sheets API v4</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Webhook Route:</span>
+                <span className="font-mono text-slate-300">/api/telegram/webhook</span>
               </div>
             </div>
 
-            {/* Mini App URL Display Bar */}
-            <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2 overflow-hidden">
-                <span className="text-xs font-semibold text-slate-400 shrink-0">Mini App URL:</span>
-                <code className="text-xs font-mono text-emerald-400 truncate select-all">
-                  {miniAppUrl}
-                </code>
-              </div>
-              <button
-                onClick={() => {
-                  triggerHaptic('medium');
-                  alert('Telegram Haptic Feedback (Vibratsiya) sinovi muvaffaqiyatli ishga tushdi!');
-                }}
-                className="flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-semibold px-2 py-1 bg-sky-500/10 hover:bg-sky-500/20 rounded-lg transition-colors shrink-0"
-              >
-                <Vibrate className="w-3.5 h-3.5" />
-                <span>Haptic (Tebranish) sinash</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Action Card: Real-time report to @SarhisobMoliya_bot */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Bot className="w-4 h-4 text-sky-400" />
-                  <span>@SarhisobMoliya_bot — Jonli Natijalarni Botda Chiqarish</span>
-                </h4>
-                <p className="text-xs text-slate-400">
-                  Joriy balans, tovarlar ro'yxati va Donut tahlili natijalarini to'g'ridan-to'g'ri Telegram botingizga yuboring yoki bot xabarlarini avtomatlashtiring.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  onClick={handleAutoSetWebhook}
-                  disabled={settingWebhook}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all"
-                  title="Telegram webhook ulanishini avtomatik sozlash"
-                >
-                  {settingWebhook ? <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-400" /> : <RefreshCw className="w-3.5 h-3.5 text-sky-400" />}
-                  <span>Webhook-ni Faollashtirish</span>
-                </button>
-
-                <button
-                  onClick={handleSendFinancialReportToBot}
-                  disabled={sendingReport}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-all shadow-md shadow-emerald-950 active:scale-95"
-                >
-                  {sendingReport ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                  <span>Natijalarni Botga Yuborish</span>
-                </button>
-              </div>
-            </div>
-
-            {reportStatus && (
-              <div
-                className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
-                  reportStatus.type === 'success'
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-                }`}
-              >
-                {reportStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-                <span>{reportStatus.text}</span>
-              </div>
-            )}
-
-            {webhookStatus && (
-              <div
-                className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
-                  webhookStatus.type === 'success'
-                    ? 'bg-sky-500/10 border-sky-500/30 text-sky-400'
-                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-                }`}
-              >
-                {webhookStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-                <span>{webhookStatus.text}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Setup Guide: 2 Easy Ways to set up in BotFather */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Method 1: Menu Button (Recommended & Fast) */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-3.5">
+            {/* Subscribe Chat ID Form */}
+            <form onSubmit={handleRegisterChat} className="space-y-2 pt-2 border-t border-slate-800">
+              <label className="text-xs font-semibold text-slate-300 block">
+                Receive Real-Time Expense Alerts (Enter your Telegram Chat ID):
+              </label>
               <div className="flex items-center gap-2">
-                <span className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-xs font-bold text-emerald-400">
-                  1
-                </span>
-                <h4 className="text-sm font-bold text-white">
-                  1-usul: Menu Button (Pastki tugma) sifatida qo'shish
-                </h4>
+                <input
+                  type="text"
+                  required
+                  value={chatIdInput}
+                  onChange={(e) => setChatIdInput(e.target.value)}
+                  placeholder="e.g. 576037959 or @user"
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+                />
+                <button
+                  type="submit"
+                  disabled={isRegistering}
+                  className="px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-semibold transition active:scale-95 disabled:opacity-50"
+                >
+                  {isRegistering ? 'Registering...' : 'Register'}
+                </button>
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Bu usulda har safar bot ochilganda, chap pastki burchakda qulay <strong className="text-slate-200">"Sarhisob Ilova"</strong> tugmasi turadi.
-              </p>
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 text-xs">
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">1.</span>
-                  <span className="text-slate-300">Telegramda <strong className="text-white">@BotFather</strong> ga kiring.</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">2.</span>
-                  <span className="text-slate-300"><code className="bg-slate-800 px-1 py-0.5 rounded text-emerald-400">/setmenubutton</code> buyrug'ini yuboring.</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">3.</span>
-                  <span className="text-slate-300">Botingizni tanlang va Web App URL sifatida quyidagi manzilni kiriting:</span>
-                </div>
-                <div className="p-2 bg-slate-900 rounded border border-slate-850 font-mono text-[11px] text-sky-300 break-all">
-                  {miniAppUrl}
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">4.</span>
-                  <span className="text-slate-300">Tugma matniga <strong className="text-white">"Sarhisob Moliya"</strong> deb yozing. Tayyor!</span>
-                </div>
-              </div>
-            </div>
+              {registerStatus && (
+                <p className="text-[11px] text-emerald-400 mt-1 font-medium">{registerStatus}</p>
+              )}
+            </form>
+          </div>
 
-            {/* Method 2: Direct /newapp Mini App */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-3.5">
-              <div className="flex items-center gap-2">
-                <span className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-xs font-bold text-sky-400">
-                  2
-                </span>
-                <h4 className="text-sm font-bold text-white">
-                  2-usul: Telegram Web App (/newapp) ro'yxatdan o'tkazish
-                </h4>
+          {/* Bot Features List */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+              Supported Bot Commands & Flows
+            </h4>
+            <div className="space-y-2 text-xs text-slate-400">
+              <div className="p-2.5 bg-slate-850 rounded-xl">
+                <code className="text-sky-400 font-bold">➕ Add Expense</code> — Interactive wizard: Amount → Category buttons → Description → Payment buttons → Confirm → Saved directly to Google Sheets!
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Bot orqali to'g'ridan-to'g'ri <code className="text-sky-300">t.me/BotUsername/app</code> havolasini olib guruhlarda va kanallarda ulashish imkoni.
-              </p>
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 text-xs">
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">1.</span>
-                  <span className="text-slate-300"><strong className="text-white">@BotFather</strong> ga <code className="bg-slate-800 px-1 py-0.5 rounded text-emerald-400">/newapp</code> yuboring.</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">2.</span>
-                  <span className="text-slate-300">Botingizni tanlang, Ilova nomini kiriting (<strong className="text-white">Sarhisob Moliya</strong>).</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">3.</span>
-                  <span className="text-slate-300">Tavsif va 640x360 rasm yuklang (yoki o'tkazib yuboring).</span>
-                </div>
-                <div className="flex items-start gap-2">
-                  <span className="text-sky-400 font-bold">4.</span>
-                  <span className="text-slate-300">Web App URL so'raganda ushbu havolani yuboring:</span>
-                </div>
-                <div className="p-2 bg-slate-900 rounded border border-slate-850 font-mono text-[11px] text-sky-300 break-all">
-                  {miniAppUrl}
-                </div>
+              <div className="p-2.5 bg-slate-850 rounded-xl">
+                <code className="text-sky-400 font-bold">📊 Dashboard</code> — Live breakdown of Today's, Current Month's, and 3-Month total expenses.
+              </div>
+              <div className="p-2.5 bg-slate-850 rounded-xl">
+                <code className="text-sky-400 font-bold">📅 Monthly Monitoring</code> — Quick comparison between Month 1, Month 2, and Month 3.
+              </div>
+              <div className="p-2.5 bg-slate-850 rounded-xl">
+                <code className="text-sky-400 font-bold">📜 History</code> — View the latest transactions recorded.
               </div>
             </div>
           </div>
 
-          {/* Interactive Telegram Mini App Phone Preview Frame */}
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between">
+        </div>
+
+        {/* RIGHT: INTERACTIVE TELEGRAM CONVERSATION SIMULATOR */}
+        <div className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden flex flex-col h-[520px] shadow-2xl">
+          
+          {/* Mock Telegram Header */}
+          <div className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-full bg-sky-600 flex items-center justify-center text-white font-bold">
+                <Bot className="w-4 h-4" />
+              </div>
               <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Smartphone className="w-4 h-4 text-sky-400" />
-                  <span>Telegram Mini App Sinov Simulyatori</span>
-                </h4>
-                <p className="text-xs text-slate-400">
-                  Foydalanuvchi ilovangizni Telegram ichida ochganda qanday ko'rinishi:
-                </p>
+                <p className="font-bold text-xs text-white leading-tight">@{DEFAULT_TELEGRAM_BOT_USERNAME}</p>
+                <p className="text-[10px] text-emerald-400">bot • official accounting agent</p>
               </div>
-              <span className="text-[11px] px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full font-semibold">
-                Jonli ma'lumotlar bilan
-              </span>
             </div>
+            <span className="text-[10px] text-slate-400 uppercase font-mono px-2 py-0.5 rounded bg-slate-800">
+              Live Simulator
+            </span>
+          </div>
 
-            {/* Simulated Phone Shell */}
-            <div className="max-w-sm mx-auto bg-slate-950 border-4 border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
-              {/* Telegram Top App Bar */}
-              <div className="bg-slate-900 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between text-xs">
-                <span className="text-slate-400 font-medium">Yopish</span>
-                <div className="text-center">
-                  <span className="font-bold text-white block text-[13px]">Sarhisob Moliya</span>
-                  <span className="text-[10px] text-slate-400">bot</span>
-                </div>
-                <span className="text-slate-400 font-bold">···</span>
-              </div>
-
-              {/* Mini App Content Inside Phone */}
-              <div className="p-4 space-y-4 bg-slate-950 min-h-[380px]">
-                {/* Balance Widget */}
-                <div className="bg-gradient-to-br from-emerald-950/60 to-slate-900 p-4 rounded-2xl border border-emerald-500/30 text-center space-y-1">
-                  <span className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">
-                    Umumiy Balans
-                  </span>
-                  <div className="text-xl font-black text-emerald-400">
-                    {formatUZS(balance)}
-                  </div>
-                  <span className="text-[10px] text-slate-400">
-                    {transactions.length} ta amaliyot qayd qilingan
-                  </span>
+          {/* Messages Container */}
+          <div className="flex-1 p-4 overflow-y-auto space-y-3 text-xs">
+            {simMessages.map((msg, i) => (
+              <div
+                key={i}
+                className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
+              >
+                <div
+                  className={`p-3 rounded-2xl max-w-[85%] whitespace-pre-line leading-relaxed ${
+                    msg.sender === 'user'
+                      ? 'bg-sky-600 text-white rounded-br-none'
+                      : 'bg-slate-850 text-slate-200 border border-slate-800 rounded-bl-none'
+                  }`}
+                >
+                  {msg.text}
                 </div>
 
-                {/* Quick Action Buttons */}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => {
-                      triggerHaptic('medium');
-                      setActiveSubTab('chat');
-                      setInputText('/hisobot');
-                    }}
-                    className="p-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-xl text-left transition-colors"
-                  >
-                    <span className="text-[10px] text-sky-400 block font-semibold">Tahlil</span>
-                    <span className="text-xs font-bold text-white">Hisobot olish</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      triggerHaptic('medium');
-                      setActiveSubTab('chat');
-                      setInputText('/prognoz');
-                    }}
-                    className="p-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-xl text-left transition-colors"
-                  >
-                    <span className="text-[10px] text-purple-400 block font-semibold">AI Prognoz</span>
-                    <span className="text-xs font-bold text-white">Oylik bashorat</span>
-                  </button>
-                </div>
-
-                {/* Recent mini transactions with date & time */}
-                <div className="space-y-2">
-                  <span className="text-[11px] font-semibold text-slate-400">
-                    So'nggi yozuvlar (Vaqti bilan):
-                  </span>
-                  <div className="space-y-1.5">
-                    {transactions.slice(0, 3).map((t) => (
-                      <div
-                        key={t.id}
-                        className="p-2.5 bg-slate-900 border border-slate-850 rounded-xl flex items-center justify-between text-xs"
+                {/* Inline Action Buttons */}
+                {msg.buttons && (
+                  <div className="flex flex-wrap gap-1.5 mt-2 max-w-[85%]">
+                    {msg.buttons.map((btn) => (
+                      <button
+                        key={btn}
+                        onClick={() => {
+                          if (simStep === 'category') handleSimulateSelectCategory(btn);
+                          else if (simStep === 'payment') handleSimulateSelectPayment(btn);
+                          else if (simStep === 'confirm') {
+                            if (btn === '✅ Confirm') handleSimulateConfirm();
+                            else {
+                              setSimStep('idle');
+                              setSimMessages(p => [...p, { sender: 'user', text: '❌ Cancel' }, { sender: 'bot', text: 'Cancelled.' }]);
+                            }
+                          } else {
+                            handleSimulateButtonClick(btn);
+                          }
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] font-medium transition active:scale-95"
                       >
-                        <div>
-                          <span className="font-semibold text-white block text-[11px]">{t.description}</span>
-                          <span className="text-[9px] text-slate-400 font-mono">
-                            {t.date} · {getTransactionTimeString(t)}
-                          </span>
-                        </div>
-                        <span
-                          className={`font-bold text-[11px] ${
-                            t.type === 'income' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}
-                        >
-                          {t.type === 'income' ? '+' : '-'}{formatUZS(t.amount)}
-                        </span>
-                      </div>
+                        {btn}
+                      </button>
                     ))}
                   </div>
-                </div>
+                )}
               </div>
-
-              {/* Telegram Mini App Native MainButton simulation */}
-              <div className="p-3 bg-slate-900 border-t border-slate-800">
-                <button
-                  onClick={() => {
-                    triggerHaptic('heavy');
-                    alert('Mini App orqali yangi amaliyot qo‘shish oynasi ochilmoqda!');
-                  }}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition-colors"
-                >
-                  + Yangi amaliyot qo'shish
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2. Interactive Telegram Chat Simulator Tab */}
-      {activeSubTab === 'chat' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col h-[650px] relative animate-in fade-in">
-          {/* Telegram Mock Header */}
-          <div className="bg-slate-850 px-4 py-3 border-b border-slate-800 flex items-center justify-between z-10">
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-sky-600 to-sky-400 flex items-center justify-center text-white font-bold">
-                  <Bot className="w-5 h-5" />
-                </div>
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 absolute bottom-0 right-0 border-2 border-slate-850" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-white">
-                  Sarhisob AI ({botConfig.botUsername || '@SarhisobMoliyaBot'})
-                </h3>
-                <span className="text-[11px] text-emerald-400 flex items-center gap-1 font-medium">
-                  online · bot
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setActiveSubTab('miniapp')}
-                className="text-xs font-semibold px-2.5 py-1 bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 rounded-lg border border-sky-500/20 transition-colors flex items-center gap-1"
-              >
-                <Smartphone className="w-3.5 h-3.5" />
-                <span>Mini App</span>
-              </button>
-              <button
-                onClick={() => setActiveSubTab('settings')}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                title="Sozlamalar"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/60">
-            <div className="text-center my-2">
-              <span className="text-[11px] bg-slate-900 border border-slate-800 text-slate-400 px-3 py-1 rounded-full">
-                Bugun · Telegram Bot Integratsiyasi
-              </span>
-            </div>
-
-            {messages.map((msg) => {
-              const isUser = msg.sender === 'user';
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} space-y-1.5`}
-                >
-                  <div
-                    className={`max-w-[85%] sm:max-w-[70%] rounded-2xl p-3.5 text-xs sm:text-sm leading-relaxed shadow-sm ${
-                      isUser
-                        ? 'bg-sky-600 text-white rounded-br-none'
-                        : 'bg-slate-850 text-slate-200 border border-slate-800 rounded-bl-none'
-                    }`}
-                  >
-                    <div className="whitespace-pre-line">{msg.text}</div>
-
-                    {/* Detected Transaction Badge */}
-                    {msg.detectedTransaction && (
-                      <div className="mt-2.5 pt-2 border-t border-slate-700/60 flex items-center justify-between text-xs text-emerald-400">
-                        <span className="flex items-center gap-1 font-medium">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Muvaffaqiyatli saqlandi:</span>
-                        </span>
-                        <span className="font-bold text-white">
-                          {formatUZS(msg.detectedTransaction.amount)} ({msg.detectedTransaction.category})
-                        </span>
-                      </div>
-                    )}
-
-                    <div className="flex justify-end items-center gap-1 mt-1 text-[10px] text-slate-400">
-                      <span>{msg.timestamp}</span>
-                      {isUser && <CheckCheck className="w-3.5 h-3.5 text-sky-200" />}
-                    </div>
-                  </div>
-
-                  {/* Inline Keyboard Buttons if present */}
-                  {msg.keyboard && msg.keyboard.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {msg.keyboard.map((btn, bIdx) => (
-                        <button
-                          key={bIdx}
-                          onClick={() => handleSend(btn)}
-                          className="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-750 text-sky-400 border border-slate-700/70 rounded-lg transition-colors font-medium shadow-sm active:scale-95"
-                        >
-                          {btn}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {isLoading && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-850 border border-slate-800 px-3.5 py-2 rounded-2xl rounded-bl-none w-fit">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-400" />
-                <span>Sarhisob AI javob yozmoqda...</span>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Quick Command Suggestions Chips */}
-          <div className="px-3 py-2 bg-slate-900 border-t border-slate-800 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-            <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider shrink-0 mr-1">
-              Tezkor:
-            </span>
-            {quickSamples.map((cmd, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleSend(cmd)}
-                className="text-[11px] px-2.5 py-1 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-lg whitespace-nowrap transition-colors border border-slate-700/50 active:scale-95"
-              >
-                {cmd}
-              </button>
             ))}
           </div>
 
-          {/* Chat Input Bar */}
-          <div className="p-3 bg-slate-850 border-t border-slate-800 flex items-center gap-2">
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSend();
-              }}
-              placeholder="Xabar yozing (masalan: Tushlik 45000 yoki /hisobot)..."
-              className="flex-1 bg-slate-950 border border-slate-750 rounded-xl px-4 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-            />
-            <button
-              onClick={() => handleSend()}
-              disabled={!inputText.trim() || isLoading}
-              className="p-2.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors shadow-sm"
-              title="Yuborish"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 3. Settings & Bot API Config Tab */}
-      {activeSubTab === 'settings' && (
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 space-y-6 animate-in fade-in">
-          <div>
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Settings className="w-5 h-5 text-sky-400" />
-              <span>Haqiqiy Telegram Botni Ulash Sozlamalari</span>
-            </h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Bot tokeningizni kiriting va shaxsiy Telegram botingizga jonli bildirishnomalar yuboring:
-            </p>
-          </div>
-
-          {/* Bot Token input and connection test */}
-          <div className="p-5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                <Radio className="w-4 h-4 text-sky-400" />
-                <span>Haqiqiy Bot Token (Telegram Bot API)</span>
-              </label>
-              {botConfig.isConnected && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>@{botConfig.botUsername || 'Bot'} faol</span>
-                </span>
-              )}
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                value={botConfig.botToken}
-                onChange={(e) => {
-                  const updated = { ...botConfig, botToken: e.target.value };
-                  setBotConfig(updated);
-                  localStorage.setItem('sarhisob_telegram_config', JSON.stringify(updated));
-                }}
-                placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz..."
-                className="flex-1 bg-slate-900 border border-slate-750 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
-              <button
-                onClick={handleTestBotToken}
-                disabled={testingToken}
-                className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
-              >
-                {testingToken ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                <span>{testingToken ? 'Tekshirilmoqda...' : 'Ulanishni tekshirish'}</span>
-              </button>
-            </div>
-
-            {tokenStatus && (
-              <div
-                className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
-                  tokenStatus.type === 'success'
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-                }`}
-              >
-                {tokenStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-                <span>{tokenStatus.text}</span>
+          {/* Simulator Input Bar */}
+          <div className="p-3 bg-slate-900 border-t border-slate-800">
+            {simStep === 'amount' && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={simAmount}
+                  onChange={(e) => setSimAmount(e.target.value)}
+                  placeholder="Enter amount (e.g. 150000)"
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                />
+                <button
+                  onClick={handleSimulateSubmitAmount}
+                  className="px-3 py-2 bg-sky-600 text-white rounded-xl text-xs font-semibold"
+                >
+                  Send
+                </button>
               </div>
             )}
 
-            {/* Telegram Notification Test */}
-            <div className="pt-3 border-t border-slate-850 space-y-2">
-              <label className="text-xs font-medium text-slate-300">
-                Sizning Telegram Chat ID:
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2">
+            {simStep === 'description' && (
+              <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  value={botConfig.chatId || ''}
-                  onChange={(e) => {
-                    const updated = { ...botConfig, chatId: e.target.value };
-                    setBotConfig(updated);
-                    localStorage.setItem('sarhisob_telegram_config', JSON.stringify(updated));
-                  }}
-                  placeholder="Masalan: 123456789"
-                  className="flex-1 bg-slate-900 border border-slate-750 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-500"
+                  value={simDescription}
+                  onChange={(e) => setSimDescription(e.target.value)}
+                  placeholder="Enter description"
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
                 />
                 <button
-                  onClick={handleSendLiveNotification}
-                  disabled={sendingTestNotify}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0"
+                  onClick={handleSimulateSubmitDescription}
+                  className="px-3 py-2 bg-sky-600 text-white rounded-xl text-xs font-semibold"
                 >
-                  {sendingTestNotify ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                  <span>Sinov xabari yuborish</span>
+                  Send
                 </button>
               </div>
+            )}
 
-              {notifyStatus && (
-                <div
-                  className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
-                    notifyStatus.type === 'success'
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                      : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-                  }`}
+            {(simStep === 'idle' || simStep === 'category' || simStep === 'payment' || simStep === 'confirm') && (
+              <div className="flex items-center justify-between text-[11px] text-slate-400 px-2 py-1">
+                <span>Select option from buttons above or click ➕ Add Expense</span>
+                <button
+                  onClick={() => handleSimulateButtonClick('➕ Add Expense')}
+                  className="text-sky-400 font-semibold underline hover:text-white"
                 >
-                  {notifyStatus.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-                  <span>{notifyStatus.text}</span>
-                </div>
-              )}
-            </div>
+                  ➕ Add Expense
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Webhook URL display */}
-          <div className="space-y-2">
-            <label className="block text-xs font-medium text-slate-300">
-              Sizning Webhook URL manzilingiz:
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                readOnly
-                value={`${window.location.origin}/api/telegram/webhook`}
-                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-300"
-              />
-              <button
-                onClick={copyWebhookUrl}
-                className="px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
-              >
-                {isWebhookCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                <span>{isWebhookCopied ? 'Nusxalandi' : 'Nusxa olish'}</span>
-              </button>
-            </div>
-          </div>
         </div>
-      )}
+
+      </div>
+
     </div>
   );
 };

@@ -141,7 +141,7 @@ export const TransactionList: React.FC<TransactionListProps> = ({
         id: targetTxToDelete.id,
         description: targetTxToDelete.itemName || targetTxToDelete.description,
         amount: targetTxToDelete.amount,
-        type: targetTxToDelete.type,
+        type: targetTxToDelete.type || 'expense',
       },
       deleteReason
     );

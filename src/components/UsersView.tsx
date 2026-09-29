@@ -67,7 +67,7 @@ export const UsersView: React.FC<UsersViewProps> = ({
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (
-      u.displayName.toLowerCase().includes(q) ||
+      (u.displayName || u.name || '').toLowerCase().includes(q) ||
       u.email.toLowerCase().includes(q) ||
       u.role.toLowerCase().includes(q)
     );
@@ -189,7 +189,7 @@ export const UsersView: React.FC<UsersViewProps> = ({
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-slate-800 to-indigo-900/70 border border-slate-700 flex items-center justify-center font-bold text-sm text-white shrink-0">
-                    {u.displayName[0]?.toUpperCase() || 'U'}
+                    {(u.displayName || u.name || 'U')[0]?.toUpperCase()}
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">

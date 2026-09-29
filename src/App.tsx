@@ -1,617 +1,606 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
-import { Header } from './components/Header';
-import { DashboardOverview } from './components/DashboardOverview';
-import { TransactionList } from './components/TransactionList';
-import { UsersView } from './components/UsersView';
-import { AdminPanelView } from './components/AdminPanelView';
-import { AIFinancialAdvisor } from './components/AIFinancialAdvisor';
-import { ExpenseForecast } from './components/ExpenseForecast';
-import { SavingsGoals } from './components/SavingsGoals';
-import { TelegramBotView } from './components/TelegramBotView';
-import { GoogleSheetsSync } from './components/GoogleSheetsSync';
-import { FinancialRiskAudit } from './components/FinancialRiskAudit';
-import { AnalyticsView } from './components/AnalyticsView';
-import { TransactionFormModal } from './components/TransactionFormModal';
-import { AuthModal } from './components/AuthModal';
-import { VPSDeploymentModal } from './components/VPSDeploymentModal';
-
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Transaction, 
-  RecurringBill, 
-  SavingsGoal, 
-  TelegramChatMessage, 
-  ActiveTab,
-  AppUser,
-  ADMIN_EMAIL 
+  AppUser, 
+  Expense, 
+  Category, 
+  ThreeMonthPeriodSettings, 
+  AuditLogEntry, 
+  ActiveNavTab, 
+  ADMIN_EMAIL, 
+  USER_EMAIL, 
+  SPREADSHEET_ID 
 } from './types';
-
+import { DEFAULT_CATEGORIES, DEFAULT_PERIOD_SETTINGS, INITIAL_EXPENSES } from './data/defaults';
 import { 
-  INITIAL_TRANSACTIONS, 
-  INITIAL_RECURRING_BILLS, 
-  INITIAL_SAVINGS_GOALS, 
-  INITIAL_TELEGRAM_MESSAGES,
-  INITIAL_USERS,
-  EXPENSE_CATEGORIES
-} from './data/initialData';
+  initAuth, 
+  googleSignIn, 
+  logout as authLogout, 
+  switchAuthorizedAccount, 
+  getCachedOAuthToken, 
+  checkUserAuthorization 
+} from './lib/firebase';
+import { 
+  batchSyncAllToSheets, 
+  initializeAndCheckSpreadsheet 
+} from './services/googleSheets';
 
-import { initAuth, getCachedOAuthToken } from './lib/firebase';
-import { notifyNewTransactionViaServer, DEFAULT_TELEGRAM_BOT_USERNAME } from './services/telegramService';
+import { Header } from './components/Header';
+import { Navigation } from './components/Navigation';
+import { DashboardView } from './components/DashboardView';
+import { MonthlyMonitoringView } from './components/MonthlyMonitoringView';
+import { HistoryView } from './components/HistoryView';
+import { AuditLogView } from './components/AuditLogView';
+import { CategoriesView } from './components/CategoriesView';
+import { SettingsView } from './components/SettingsView';
+import { SetupStatusView } from './components/SetupStatusView';
+import { ExportReportsView } from './components/ExportReportsView';
+import { TelegramBotView } from './components/TelegramBotView';
+import { ExpenseFormModal } from './components/ExpenseFormModal';
+import { AccessDeniedView } from './components/AccessDeniedView';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isVPSModalOpen, setIsVPSModalOpen] = useState(false);
-  const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
-  const [telegramToast, setTelegramToast] = useState<{ message: string; ok: boolean } | null>(null);
-
-  // Authentication State with persistent storage
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+  // Current user state (Default to Admin 4g.sudoer@gmail.com for seamless inspection)
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
     try {
-      const saved = localStorage.getItem('sarhisob_current_user');
-      return saved ? JSON.parse(saved) : null;
+      const saved = localStorage.getItem('dem_current_user');
+      return saved ? JSON.parse(saved) : switchAuthorizedAccount(ADMIN_EMAIL);
     } catch {
-      return null;
-    }
-  });
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-
-  // Persistent Users list
-  const [users, setUsers] = useState<AppUser[]>(() => {
-    try {
-      const saved = localStorage.getItem('sarhisob_users');
-      return saved ? JSON.parse(saved) : INITIAL_USERS;
-    } catch {
-      return INITIAL_USERS;
+      return switchAuthorizedAccount(ADMIN_EMAIL);
     }
   });
 
-  // Persistent state in localStorage with defaults
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    try {
-      const saved = localStorage.getItem('sarhisob_transactions');
-      return saved ? JSON.parse(saved) : INITIAL_TRANSACTIONS;
-    } catch {
-      return INITIAL_TRANSACTIONS;
-    }
-  });
+  const [accessToken, setAccessToken] = useState<string | null>('preview-token');
+  const [accessDeniedEmail, setAccessDeniedEmail] = useState<string | null>(null);
 
-  const [recurringBills, setRecurringBills] = useState<RecurringBill[]>(() => {
-    try {
-      const saved = localStorage.getItem('sarhisob_bills');
-      return saved ? JSON.parse(saved) : INITIAL_RECURRING_BILLS;
-    } catch {
-      return INITIAL_RECURRING_BILLS;
-    }
-  });
+  // Core Data States
+  const [expenses, setExpenses] = useState<Expense[]>(INITIAL_EXPENSES);
+  const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
+  const [settings, setSettings] = useState<ThreeMonthPeriodSettings>(DEFAULT_PERIOD_SETTINGS);
+  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([
+    {
+      id: 'AUD-001',
+      action: 'SETTINGS_CHANGE',
+      userEmail: ADMIN_EMAIL,
+      timestamp: new Date().toISOString(),
+      newValue: 'Initial 3-month period set (01.10.2026 - 31.12.2026)',
+      reason: 'Application initialization',
+    },
+  ]);
 
-  const [goals, setGoals] = useState<SavingsGoal[]>(() => {
-    try {
-      const saved = localStorage.getItem('sarhisob_goals');
-      return saved ? JSON.parse(saved) : INITIAL_SAVINGS_GOALS;
-    } catch {
-      return INITIAL_SAVINGS_GOALS;
-    }
-  });
+  // UI state
+  const [activeTab, setActiveTab] = useState<ActiveNavTab>('dashboard');
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [selectedMonthForMonitoring, setSelectedMonthForMonitoring] = useState<'Month 1' | 'Month 2' | 'Month 3'>('Month 1');
 
-  const [telegramMessages, setTelegramMessages] = useState<TelegramChatMessage[]>(() => {
-    try {
-      const saved = localStorage.getItem('sarhisob_tg_messages');
-      return saved ? JSON.parse(saved) : INITIAL_TELEGRAM_MESSAGES;
-    } catch {
-      return INITIAL_TELEGRAM_MESSAGES;
-    }
-  });
+  // Google Sheets sync state
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  // Save currentUser to localStorage whenever it changes
+  // Period Expiration Calculation
+  const { remainingDays, isPeriodEnded } = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const isEnded = today > settings.endDate;
+    const nowMs = new Date().getTime();
+    const endMs = new Date(settings.endDate).getTime();
+    const diff = Math.max(0, Math.ceil((endMs - nowMs) / (1000 * 60 * 60 * 24)));
+    return { remainingDays: diff, isPeriodEnded: isEnded };
+  }, [settings.endDate]);
+
+  // Fetch initial data from server APIs
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem(
-        'sarhisob_current_user',
-        JSON.stringify({
-          uid: currentUser.uid,
-          email: currentUser.email,
-          displayName: currentUser.displayName,
-          photoURL: currentUser.photoURL,
-        })
-      );
-    } else {
-      localStorage.removeItem('sarhisob_current_user');
-    }
+    const loadServerData = async () => {
+      try {
+        const [expRes, catRes, setRes, audRes] = await Promise.all([
+          fetch('/api/expenses').catch(() => null),
+          fetch('/api/categories').catch(() => null),
+          fetch('/api/settings').catch(() => null),
+          fetch('/api/audit-log', {
+            headers: { 'x-user-email': currentUser?.email || ADMIN_EMAIL },
+          }).catch(() => null),
+        ]);
+
+        if (expRes && expRes.ok) {
+          const expData = await expRes.json();
+          if (expData.expenses && expData.expenses.length > 0) {
+            setExpenses(expData.expenses);
+          }
+        }
+
+        if (catRes && catRes.ok) {
+          const catData = await catRes.json();
+          if (catData.categories && catData.categories.length > 0) {
+            setCategories(catData.categories);
+          }
+        }
+
+        if (setRes && setRes.ok) {
+          const setData = await setRes.json();
+          if (setData.settings) {
+            setSettings(setData.settings);
+          }
+        }
+
+        if (audRes && audRes.ok) {
+          const audData = await audRes.json();
+          if (audData.auditLog && audData.auditLog.length > 0) {
+            setAuditLog(audData.auditLog);
+          }
+        }
+      } catch (e) {
+        console.warn('Using local fallback state:', e);
+      }
+    };
+
+    loadServerData();
   }, [currentUser]);
 
-  // Dedicated Admin Login Handler (Instant 1-Click Access)
-  const handleLoginAsAdmin = () => {
-    const adminUser = {
-      uid: 'admin-indigo',
-      email: ADMIN_EMAIL,
-      displayName: 'IndigoKids (Bosh Administrator)',
-      photoURL: null,
-      emailVerified: true,
-      isAnonymous: false,
-    } as unknown as User;
-    setCurrentUser(adminUser);
-    setAccessToken('admin-token');
-    localStorage.setItem(
-      'sarhisob_current_user',
-      JSON.stringify({
-        uid: 'admin-indigo',
-        email: ADMIN_EMAIL,
-        displayName: 'IndigoKids (Bosh Administrator)',
-        role: 'admin',
-      })
-    );
-  };
-
-  const handleLoginWithEmail = (email: string, displayName?: string) => {
-    const cleanEmail = email.trim().toLowerCase();
-    const isAdmin = cleanEmail === ADMIN_EMAIL.toLowerCase();
-    const name = displayName || (isAdmin ? 'IndigoKids (Bosh Administrator)' : cleanEmail.split('@')[0]);
-    const userObj = {
-      uid: `user-${Date.now()}`,
-      email: cleanEmail,
-      displayName: name,
-      photoURL: null,
-      emailVerified: true,
-      isAnonymous: false,
-    } as unknown as User;
-    setCurrentUser(userObj);
-    setAccessToken(isAdmin ? 'admin-token' : 'user-token');
-    localStorage.setItem(
-      'sarhisob_current_user',
-      JSON.stringify({
-        uid: userObj.uid,
-        email: cleanEmail,
-        displayName: name,
-        role: isAdmin ? 'admin' : 'user',
-      })
-    );
-  };
-
-  const handleGrantAdminAccess = (email: string) => {
-    const cleanEmail = email.trim().toLowerCase();
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.email.toLowerCase() === cleanEmail ? { ...u, role: 'admin' as const } : u
-      )
-    );
-  };
-
-  // Initialize Firebase Auth listener on mount
+  // Listen for Firebase Auth changes
   useEffect(() => {
-    const unsubscribe = initAuth((user) => {
-      if (user) {
+    const unsubscribe = initAuth(
+      (user, token) => {
         setCurrentUser(user);
-        setAccessToken(getCachedOAuthToken());
+        setAccessToken(token || 'preview-token');
+        setAccessDeniedEmail(null);
+        localStorage.setItem('dem_current_user', JSON.stringify(user));
+      },
+      (errorMsg) => {
+        if (errorMsg) {
+          setAccessDeniedEmail(errorMsg);
+        }
       }
-    });
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
+    );
+    return () => unsubscribe();
   }, []);
 
-  // Sync logged in user with users state
-  useEffect(() => {
-    if (currentUser?.email) {
-      const email = currentUser.email.toLowerCase();
-      const isAdmin = email === ADMIN_EMAIL.toLowerCase();
-
-      setUsers((prev) => {
-        const found = prev.find((u) => u.email.toLowerCase() === email);
-        if (found) {
-          return prev.map((u) =>
-            u.email.toLowerCase() === email
-              ? {
-                  ...u,
-                  displayName: currentUser.displayName || u.displayName,
-                  photoURL: currentUser.photoURL || u.photoURL,
-                  role: isAdmin ? 'admin' : u.role,
-                  lastActiveAt: new Date().toLocaleString('uz-UZ'),
-                }
-              : u
-          );
-        }
-        return [
-          {
-            uid: currentUser.uid,
-            email: currentUser.email!,
-            displayName: currentUser.displayName || currentUser.email!.split('@')[0],
-            photoURL: currentUser.photoURL || undefined,
-            role: isAdmin ? 'admin' : 'user',
-            joinedAt: new Date().toISOString().split('T')[0],
-            lastActiveAt: new Date().toLocaleString('uz-UZ'),
-            totalTransactionsCount: 0,
-            totalIncomeAmount: 0,
-            totalExpenseAmount: 0,
-          },
-          ...prev,
-        ];
-      });
-    }
-  }, [currentUser]);
-
-  // Save changes to localStorage
-  useEffect(() => {
-    localStorage.setItem('sarhisob_users', JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem('sarhisob_transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
-  useEffect(() => {
-    localStorage.setItem('sarhisob_bills', JSON.stringify(recurringBills));
-  }, [recurringBills]);
-
-  useEffect(() => {
-    localStorage.setItem('sarhisob_goals', JSON.stringify(goals));
-  }, [goals]);
-
-  useEffect(() => {
-    localStorage.setItem('sarhisob_tg_messages', JSON.stringify(telegramMessages));
-  }, [telegramMessages]);
-
-  // Compute overall current balance
-  const startingBaseBalance = 6500000;
-  const netFromTransactions = transactions.reduce((acc, tx) => {
-    return tx.type === 'income' ? acc + tx.amount : acc - tx.amount;
-  }, 0);
-  const currentBalance = startingBaseBalance + netFromTransactions;
-
-  // Compute Category Budgets
-  const categoryBudgets = EXPENSE_CATEGORIES.map((c) => ({
-    category: c.name,
-    limitAmount: c.monthlyBudget || 1000000,
-  }));
-
-  // Calculate critical issues count for red badge in header
-  const categorySpend: Record<string, number> = {};
-  transactions
-    .filter((t) => t.type === 'expense')
-    .forEach((t) => {
-      categorySpend[t.category] = (categorySpend[t.category] || 0) + t.amount;
-    });
-
-  let criticalCount = 0;
-  if (currentBalance < 0) criticalCount += 1;
-  const currentDay = new Date().getDate();
-  recurringBills.forEach((b) => {
-    if (!b.isPaidThisMonth && b.dueDay <= currentDay) criticalCount += 1;
-  });
-  categoryBudgets.forEach((b) => {
-    if ((categorySpend[b.category] || 0) > b.limitAmount) criticalCount += 1;
-  });
-
-  // Handlers
-  const handleAddTransaction = (newTx: Omit<Transaction, 'id'>) => {
-    const creator = newTx.createdBy || (currentUser ? {
-      uid: currentUser.uid,
-      email: currentUser.email || 'user@sarhisob.uz',
-      name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Foydalanuvchi',
-      photoURL: currentUser.photoURL || undefined,
-      role: (currentUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'admin' : 'user') as 'admin' | 'user',
-    } : {
-      email: 'mehmon@sarhisob.uz',
-      name: 'Mehmon foydalanuvchi',
-      role: 'user' as const,
-    });
-
-    const tx: Transaction = {
-      ...newTx,
-      id: `tx-${Date.now()}`,
-      itemName: newTx.itemName || newTx.description,
-      quantity: newTx.quantity || '1 dona',
-      createdAt: new Date().toISOString(),
-      time: newTx.time || new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      createdBy: creator,
-    };
-    setTransactions((prev) => [tx, ...prev]);
-
-    // Update user stats
-    if (creator.email) {
-      setUsers((prev) => {
-        const foundIndex = prev.findIndex((u) => u.email.toLowerCase() === creator.email.toLowerCase());
-        if (foundIndex >= 0) {
-          return prev.map((u, i) => i === foundIndex ? {
-            ...u,
-            totalTransactionsCount: (u.totalTransactionsCount || 0) + 1,
-            totalIncomeAmount: tx.type === 'income' ? (u.totalIncomeAmount || 0) + tx.amount : u.totalIncomeAmount,
-            totalExpenseAmount: tx.type === 'expense' ? (u.totalExpenseAmount || 0) + tx.amount : u.totalExpenseAmount,
-            lastActiveAt: new Date().toLocaleString('uz-UZ'),
-          } : u);
-        }
-        return [
-          {
-            uid: creator.uid || `user-${Date.now()}`,
-            email: creator.email,
-            displayName: creator.name,
-            photoURL: creator.photoURL,
-            role: creator.role || 'user',
-            joinedAt: new Date().toISOString().split('T')[0],
-            totalTransactionsCount: 1,
-            totalIncomeAmount: tx.type === 'income' ? tx.amount : 0,
-            totalExpenseAmount: tx.type === 'expense' ? tx.amount : 0,
-            lastActiveAt: new Date().toLocaleString('uz-UZ'),
-          },
-          ...prev,
-        ];
-      });
-    }
-
-    // Automatically send real-time notification to @SarhisobMoliya_bot
-    const updatedBalance = tx.type === 'income' ? currentBalance + tx.amount : currentBalance - tx.amount;
-    notifyNewTransactionViaServer({
-      transaction: tx,
-      newBalance: updatedBalance,
-    }).then((res) => {
-      if (res.ok) {
-        setTelegramToast({
-          message: `${tx.type === 'income' ? '🟢 Kirim' : '🔴 Chiqim'} @${DEFAULT_TELEGRAM_BOT_USERNAME} botiga avtomatik yuborildi!`,
-          ok: true,
-        });
-        setTimeout(() => setTelegramToast(null), 5000);
+  // Google Sign-In Handler
+  const handleGoogleSignIn = async () => {
+    try {
+      const result = await googleSignIn();
+      if (result) {
+        setCurrentUser(result.user);
+        setAccessToken(result.accessToken || 'preview-token');
+        setAccessDeniedEmail(null);
+        localStorage.setItem('dem_current_user', JSON.stringify(result.user));
       }
-    }).catch((err) => {
-      console.warn('Auto Telegram notification notice:', err);
-    });
-  };
-
-  const handleDeleteTransaction = (id: string) => {
-    setTransactions((prev) => prev.filter((t) => t.id !== id));
-  };
-
-  const handleAddDepositToGoal = (goalId: string, amount: number) => {
-    setGoals((prev) =>
-      prev.map((g) => {
-        if (g.id === goalId) {
-          return { ...g, currentAmount: g.currentAmount + amount };
-        }
-        return g;
-      })
-    );
-  };
-
-  const handleAddNewGoal = (newGoal: Omit<SavingsGoal, 'id'>) => {
-    const goal: SavingsGoal = {
-      ...newGoal,
-      id: `goal-${Date.now()}`,
-    };
-    setGoals((prev) => [...prev, goal]);
-  };
-
-  const handleToggleBillPaid = (billId: string) => {
-    setRecurringBills((prev) =>
-      prev.map((b) => {
-        if (b.id === billId) {
-          return { ...b, isPaidThisMonth: !b.isPaidThisMonth };
-        }
-        return b;
-      })
-    );
-  };
-
-  const handleAddNewBill = (newBill: Omit<RecurringBill, 'id'>) => {
-    const bill: RecurringBill = {
-      ...newBill,
-      id: `bill-${Date.now()}`,
-    };
-    setRecurringBills((prev) => [...prev, bill]);
-  };
-
-  const handleSendTelegramMessage = (msg: TelegramChatMessage) => {
-    setTelegramMessages((prev) => [...prev, msg]);
-  };
-
-  const handleResetToDemo = () => {
-    if (confirm("Namunaviy ma'lumotlarni qayta tiklashni xohlaysizmi?")) {
-      setTransactions(INITIAL_TRANSACTIONS);
-      setUsers(INITIAL_USERS);
-      setRecurringBills(INITIAL_RECURRING_BILLS);
-      setGoals(INITIAL_SAVINGS_GOALS);
-      setTelegramMessages(INITIAL_TELEGRAM_MESSAGES);
-      localStorage.removeItem('sarhisob_transactions');
-      localStorage.removeItem('sarhisob_users');
-      localStorage.removeItem('sarhisob_bills');
-      localStorage.removeItem('sarhisob_goals');
-      localStorage.removeItem('sarhisob_tg_messages');
-      localStorage.removeItem('sarhisob_google_sheet');
-      localStorage.removeItem('sarhisob_telegram_config');
+    } catch (err: any) {
+      if (err.message?.includes('Access denied')) {
+        setAccessDeniedEmail(err.message);
+      } else {
+        console.warn('Sign-in note:', err);
+      }
     }
   };
+
+  // Switch User Profile (for testing Admin vs User)
+  const handleSwitchUser = (newUser: AppUser) => {
+    setCurrentUser(newUser);
+    setAccessDeniedEmail(null);
+    localStorage.setItem('dem_current_user', JSON.stringify(newUser));
+  };
+
+  const handleLogout = async () => {
+    await authLogout();
+    setCurrentUser(null);
+    setAccessToken(null);
+    setAccessDeniedEmail(null);
+    localStorage.removeItem('dem_current_user');
+  };
+
+  // Sync with Google Sheets
+  const handleSyncGoogleSheets = async () => {
+    setIsSyncing(true);
+    setSyncMessage('Saved locally. Synchronizing with Google Sheets…');
+
+    try {
+      // 1. Trigger server-side synchronization
+      const serverRes = await fetch('/api/sheets/sync-all', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken || ''}`,
+          'x-user-email': currentUser?.email || USER_EMAIL,
+        },
+      });
+
+      const serverData = await serverRes.json().catch(() => ({}));
+
+      if (serverData.googleSheetsSynced) {
+        setSyncMessage('Successfully synchronized all 6 tabs with Google Sheets!');
+      } else if (serverData.isAuthError) {
+        setSyncMessage('Saved in local database. Google Sheets authorization missing or expired. Click Sign in with Google to synchronize remote spreadsheet.');
+      } else {
+        // Also run client fallback sync if available
+        await batchSyncAllToSheets(
+          accessToken || 'preview-token',
+          expenses,
+          categories,
+          settings,
+          auditLog
+        );
+        setSyncMessage('Saved locally in server database. Background sync active.');
+      }
+      setTimeout(() => setSyncMessage(null), 6000);
+    } catch (err: any) {
+      setSyncMessage('Saved in local database. Retrying background synchronization…');
+      setTimeout(() => setSyncMessage(null), 5000);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Expense Create/Update Submit Handler
+  const handleSaveExpense = async (data: Partial<Expense>) => {
+    const isEdit = Boolean(editingExpense);
+    const userEmail = currentUser?.email || USER_EMAIL;
+
+    if (isEdit && editingExpense) {
+      // Edit expense (Admin only)
+      const res = await fetch(`/api/expenses/${editingExpense.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken || ''}`,
+          'x-user-email': userEmail,
+        },
+        body: JSON.stringify(data),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to update expense');
+      }
+
+      const resData = await res.json();
+      setExpenses((prev) =>
+        prev.map((e) => (e.id === editingExpense.id ? resData.expense : e))
+      );
+
+      setAuditLog((prev) => [
+        {
+          id: `AUD-${Date.now()}`,
+          action: 'EDIT',
+          expenseId: editingExpense.id,
+          userEmail,
+          timestamp: new Date().toISOString(),
+          newValue: JSON.stringify({ amount: data.amount, description: data.description }),
+          reason: 'Admin updated expense record',
+        },
+        ...prev,
+      ]);
+
+      setSyncMessage('Expense updated. Synchronizing with Google Sheets…');
+      setTimeout(() => setSyncMessage(null), 4000);
+    } else {
+      // Add new expense
+      const res = await fetch('/api/expenses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken || ''}`,
+          'x-user-email': userEmail,
+        },
+        body: JSON.stringify({
+          ...data,
+          createdBy: userEmail,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to create expense');
+      }
+
+      const resData = await res.json();
+      setExpenses((prev) => [resData.expense, ...prev]);
+
+      setAuditLog((prev) => [
+        {
+          id: `AUD-${Date.now()}`,
+          action: 'CREATE',
+          expenseId: resData.expense.id,
+          userEmail,
+          timestamp: new Date().toISOString(),
+          newValue: JSON.stringify({ amount: data.amount, category: data.category, description: data.description }),
+          reason: 'New expense added',
+        },
+        ...prev,
+      ]);
+
+      setSyncMessage(
+        resData.remoteSheetsSynced
+          ? 'Successfully synchronized with Google Sheets!'
+          : 'Saved in server database. Background sync active.'
+      );
+      setTimeout(() => setSyncMessage(null), 4000);
+    }
+  };
+
+  // Soft Delete Handler (Admin Only)
+  const handleDeleteExpense = async (expense: Expense, reason: string) => {
+    const userEmail = currentUser?.email || ADMIN_EMAIL;
+    const res = await fetch(`/api/expenses/${expense.id}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-email': userEmail,
+      },
+      body: JSON.stringify({ reason }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.error || 'Delete failed');
+      return;
+    }
+
+    const resData = await res.json();
+    setExpenses((prev) =>
+      prev.map((e) => (e.id === expense.id ? resData.expense : e))
+    );
+
+    setAuditLog((prev) => [
+      {
+        id: `AUD-${Date.now()}`,
+        action: 'DELETE',
+        expenseId: expense.id,
+        userEmail,
+        timestamp: new Date().toISOString(),
+        reason,
+        oldValue: JSON.stringify({ amount: expense.amount, description: expense.description }),
+        newValue: JSON.stringify({ status: 'DELETED', reason }),
+      },
+      ...prev,
+    ]);
+
+    setSyncMessage('Record marked as DELETED and excluded from active accounting.');
+    setTimeout(() => setSyncMessage(null), 4000);
+  };
+
+  // Restore Deleted Expense Handler (Admin Only)
+  const handleRestoreExpense = async (expense: Expense) => {
+    const userEmail = currentUser?.email || ADMIN_EMAIL;
+    const res = await fetch(`/api/expenses/${expense.id}/restore`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-email': userEmail,
+      },
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      alert(err.error || 'Restore failed');
+      return;
+    }
+
+    const resData = await res.json();
+    setExpenses((prev) =>
+      prev.map((e) => (e.id === expense.id ? resData.expense : e))
+    );
+
+    setAuditLog((prev) => [
+      {
+        id: `AUD-${Date.now()}`,
+        action: 'RESTORE',
+        expenseId: expense.id,
+        userEmail,
+        timestamp: new Date().toISOString(),
+        reason: 'Restored back to ACTIVE by admin',
+      },
+      ...prev,
+    ]);
+
+    setSyncMessage('Expense restored to ACTIVE status.');
+    setTimeout(() => setSyncMessage(null), 4000);
+  };
+
+  // Category Add/Update Handlers
+  const handleAddCategory = async (catData: { name: string; color?: string; icon?: string }) => {
+    const res = await fetch('/api/categories', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-email': currentUser?.email || ADMIN_EMAIL,
+      },
+      body: JSON.stringify(catData),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setCategories((prev) => [...prev, data.category]);
+    }
+  };
+
+  const handleUpdateCategory = async (id: string, updates: Partial<Category>) => {
+    const res = await fetch(`/api/categories/${id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-email': currentUser?.email || ADMIN_EMAIL,
+      },
+      body: JSON.stringify(updates),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setCategories((prev) => prev.map((c) => (c.id === id ? data.category : c)));
+    }
+  };
+
+  // Settings Update Handler
+  const handleUpdateSettings = async (newSettings: ThreeMonthPeriodSettings) => {
+    const res = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-email': currentUser?.email || ADMIN_EMAIL,
+      },
+      body: JSON.stringify(newSettings),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setSettings(data.settings);
+    }
+  };
+
+  // If unauthorized email attempted
+  if (accessDeniedEmail) {
+    return (
+      <AccessDeniedView
+        attemptedEmail={accessDeniedEmail}
+        onLogout={handleLogout}
+        onSwitchUser={handleSwitchUser}
+      />
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-slate-950">
-      {/* Top Header & Navigation */}
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      
+      {/* Top Application Header */}
       <Header
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        balance={currentBalance}
-        onOpenAddModal={() => setIsAddModalOpen(true)}
-        onOpenTelegram={() => setActiveTab('telegram')}
         currentUser={currentUser}
-        onOpenAuth={() => setIsAuthModalOpen(true)}
-        onOpenVPSModal={() => setIsVPSModalOpen(true)}
-        criticalIssuesCount={criticalCount}
-        onLoginAsAdmin={handleLoginAsAdmin}
+        onGoogleSignIn={handleGoogleSignIn}
+        onLogout={handleLogout}
+        onSwitchUser={handleSwitchUser}
+        onSyncGoogleSheets={handleSyncGoogleSheets}
+        isSyncing={isSyncing}
+        syncMessage={syncMessage}
+        remainingDays={remainingDays}
+        isPeriodEnded={isPeriodEnded}
+        onOpenSetupStatus={() => setActiveTab('setup-status')}
       />
 
-      {/* Main Content Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'overview' && (
-          <DashboardOverview
-            transactions={transactions}
-            recurringBills={recurringBills}
-            goals={goals}
-            balance={currentBalance}
-            setActiveTab={setActiveTab}
-            onOpenAddModal={() => setIsAddModalOpen(true)}
-            onOpenTelegram={() => setActiveTab('telegram')}
-          />
-        )}
+      {/* Main Layout: Desktop Sidebar + Content Area */}
+      <div className="flex-1 flex max-w-7xl w-full mx-auto">
+        
+        {/* Navigation Sidebar */}
+        <Navigation
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          currentUser={currentUser}
+          onOpenAddModal={() => {
+            setEditingExpense(null);
+            setIsExpenseModalOpen(true);
+          }}
+          isPeriodEnded={isPeriodEnded}
+        />
 
-        {activeTab === 'analytics' && (
-          <AnalyticsView
-            transactions={transactions}
-            users={users}
-            onOpenAddModal={() => setIsAddModalOpen(true)}
-          />
-        )}
+        {/* Dynamic Main View */}
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 overflow-y-auto">
+          
+          {activeTab === 'dashboard' && (
+            <DashboardView
+              expenses={expenses}
+              settings={settings}
+              categories={categories}
+              onOpenAddModal={() => {
+                setEditingExpense(null);
+                setIsExpenseModalOpen(true);
+              }}
+              onNavigateToMonthly={(m) => {
+                setSelectedMonthForMonitoring(m);
+                setActiveTab('monthly');
+              }}
+              onNavigateToHistory={() => setActiveTab('history')}
+            />
+          )}
 
-        {activeTab === 'transactions' && (
-          <TransactionList
-            transactions={transactions}
-            onDeleteTransaction={handleDeleteTransaction}
-            onOpenAddModal={() => setIsAddModalOpen(true)}
-            currentUserEmail={currentUser?.email || null}
-            initialUserFilter={selectedUserFilter}
-          />
-        )}
+          {activeTab === 'monthly' && (
+            <MonthlyMonitoringView
+              expenses={expenses}
+              settings={settings}
+              selectedMonthTab={selectedMonthForMonitoring}
+              onSelectExpense={(exp) => {
+                setEditingExpense(exp);
+                setIsExpenseModalOpen(true);
+              }}
+            />
+          )}
 
-        {activeTab === 'users' && (
-          <UsersView
-            users={users}
-            transactions={transactions}
-            currentUserEmail={currentUser?.email || null}
-            onOpenAddModal={() => setIsAddModalOpen(true)}
-            onSelectUserFilter={(email) => {
-              setSelectedUserFilter(email);
-              if (email) {
-                setActiveTab('transactions');
-              }
-            }}
-            onOpenAuth={() => setIsAuthModalOpen(true)}
-          />
-        )}
+          {activeTab === 'history' && (
+            <HistoryView
+              expenses={expenses}
+              categories={categories}
+              currentUser={currentUser}
+              settings={settings}
+              onEditExpense={(exp) => {
+                setEditingExpense(exp);
+                setIsExpenseModalOpen(true);
+              }}
+              onDeleteExpense={handleDeleteExpense}
+              onRestoreExpense={handleRestoreExpense}
+            />
+          )}
 
-        {activeTab === 'admin' && (
-          <AdminPanelView
-            currentUserEmail={currentUser?.email || null}
-            users={users}
-            transactions={transactions}
-            balance={currentBalance}
-            onDeleteTransaction={handleDeleteTransaction}
-            onOpenGoogleSheets={() => setActiveTab('sheets')}
-            onOpenAuth={() => setIsAuthModalOpen(true)}
-            onLoginAsAdmin={handleLoginAsAdmin}
-            onLoginWithEmail={handleLoginWithEmail}
-            onGrantAdminAccess={handleGrantAdminAccess}
-          />
-        )}
+          {activeTab === 'audit-log' && (
+            <AuditLogView
+              auditLog={auditLog}
+              currentUser={currentUser}
+            />
+          )}
 
-        {activeTab === 'sheets' && (
-          <GoogleSheetsSync
-            currentUser={currentUser}
-            accessToken={accessToken}
-            transactions={transactions}
-            recurringBills={recurringBills}
-            goals={goals}
-            balance={currentBalance}
-            onOpenLogin={() => setIsAuthModalOpen(true)}
-          />
-        )}
+          {activeTab === 'categories' && (
+            <CategoriesView
+              categories={categories}
+              currentUser={currentUser}
+              onAddCategory={handleAddCategory}
+              onUpdateCategory={handleUpdateCategory}
+            />
+          )}
 
-        {activeTab === 'ai-advisor' && (
-          <AIFinancialAdvisor
-            transactions={transactions}
-            recurringBills={recurringBills}
-            goals={goals}
-            balance={currentBalance}
-          />
-        )}
+          {activeTab === 'reports' && (
+            <ExportReportsView
+              expenses={expenses}
+              categories={categories}
+              auditLog={auditLog}
+              settings={settings}
+              currentUser={currentUser}
+            />
+          )}
 
-        {activeTab === 'forecast' && (
-          <ExpenseForecast
-            transactions={transactions}
-            recurringBills={recurringBills}
-            goals={goals}
-            balance={currentBalance}
-          />
-        )}
+          {activeTab === 'settings' && (
+            <SettingsView
+              settings={settings}
+              currentUser={currentUser}
+              onUpdateSettings={handleUpdateSettings}
+              isPeriodEnded={isPeriodEnded}
+              remainingDays={remainingDays}
+            />
+          )}
 
-        {activeTab === 'goals' && (
-          <SavingsGoals
-            goals={goals}
-            recurringBills={recurringBills}
-            onAddDepositToGoal={handleAddDepositToGoal}
-            onAddNewGoal={handleAddNewGoal}
-            onToggleBillPaid={handleToggleBillPaid}
-            onAddNewBill={handleAddNewBill}
-          />
-        )}
+          {activeTab === 'setup-status' && (
+            <SetupStatusView
+              currentUser={currentUser}
+              accessToken={accessToken}
+              expensesCount={expenses.length}
+            />
+          )}
 
-        {activeTab === 'risks' && (
-          <FinancialRiskAudit
-            transactions={transactions}
-            recurringBills={recurringBills}
-            balance={currentBalance}
-            categoryBudgets={categoryBudgets}
-            onNavigateToTab={(tab) => setActiveTab(tab as ActiveTab)}
-          />
-        )}
+          {activeTab === 'telegram' && (
+            <TelegramBotView
+              expenses={expenses}
+              onAddExpenseDirect={handleSaveExpense}
+            />
+          )}
 
-        {activeTab === 'telegram' && (
-          <TelegramBotView
-            messages={telegramMessages}
-            onSendMessage={handleSendTelegramMessage}
-            onAddTransactionFromBot={handleAddTransaction}
-            transactions={transactions}
-            balance={currentBalance}
-          />
-        )}
-      </main>
+        </main>
+      </div>
 
-      {/* Footer (Android APK removed) */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-6 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p>© 2026 Sarhisob AI — Tovarlar nazorati, Google Sheets, Users tizimi va Telegram Mini App.</p>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsVPSModalOpen(true)}
-              className="text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              VPS Deploy Sozlamalari
-            </button>
-            <span className="text-slate-800">|</span>
-            <button
-              onClick={handleResetToDemo}
-              className="text-slate-400 hover:text-slate-200 transition-colors underline"
-            >
-              Namunaviy ma'lumotlarni tiklash
-            </button>
-          </div>
-        </div>
-      </footer>
-
-      {/* Modals */}
-      <TransactionFormModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onAddTransaction={handleAddTransaction}
-        currentUser={currentUser}
-      />
-
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        currentUser={currentUser}
-        onAuthChange={(user, token) => {
-          setCurrentUser(user);
-          setAccessToken(token || null);
+      {/* Record / Edit Expense Modal */}
+      <ExpenseFormModal
+        isOpen={isExpenseModalOpen}
+        onClose={() => {
+          setIsExpenseModalOpen(false);
+          setEditingExpense(null);
         }}
-        onLoginAsAdmin={handleLoginAsAdmin}
-        onLoginWithEmail={handleLoginWithEmail}
+        onSubmit={handleSaveExpense}
+        categories={categories}
+        currentUser={currentUser}
+        settings={settings}
+        isPeriodEnded={isPeriodEnded}
+        initialExpense={editingExpense}
       />
 
-      <VPSDeploymentModal
-        isOpen={isVPSModalOpen}
-        onClose={() => setIsVPSModalOpen(false)}
-      />
     </div>
   );
 }

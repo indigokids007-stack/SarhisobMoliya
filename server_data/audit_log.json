@@ -1,0 +1,39 @@
+[
+  {
+    "id": "AUD-1790695603412",
+    "action": "RESTORE",
+    "expenseId": "EXP-2026-000011",
+    "oldValue": "{\"status\":\"DELETED\"}",
+    "newValue": "{\"status\":\"ACTIVE\"}",
+    "userEmail": "4g.sudoer@gmail.com",
+    "timestamp": "2026-09-29T15:26:43.411Z",
+    "reason": "Expense restored back to active state by admin"
+  },
+  {
+    "id": "AUD-1790695594478",
+    "action": "DELETE",
+    "expenseId": "EXP-2026-000011",
+    "oldValue": "{\"amount\":150000,\"category\":\"Food\",\"description\":\"Supermarket groceries\"}",
+    "newValue": "{\"status\":\"DELETED\",\"deletedBy\":\"4g.sudoer@gmail.com\",\"reason\":\"Duplicate test entry\"}",
+    "userEmail": "4g.sudoer@gmail.com",
+    "timestamp": "2026-09-29T15:26:34.478Z",
+    "reason": "Duplicate test entry"
+  },
+  {
+    "id": "AUD-1790695581686",
+    "action": "CREATE",
+    "expenseId": "EXP-2026-000011",
+    "newValue": "{\"amount\":150000,\"category\":\"Food\",\"description\":\"Supermarket groceries\",\"date\":\"2026-09-29\"}",
+    "userEmail": "indigokids007@gmail.com",
+    "timestamp": "2026-09-29T15:26:21.685Z",
+    "reason": "New expense added"
+  },
+  {
+    "id": "AUD-001",
+    "action": "SETTINGS_CHANGE",
+    "userEmail": "4g.sudoer@gmail.com",
+    "timestamp": "2026-09-29T00:00:00Z",
+    "newValue": "Initial 3-month period set (01.10.2026 - 31.12.2026)",
+    "reason": "Initial setup"
+  }
+]

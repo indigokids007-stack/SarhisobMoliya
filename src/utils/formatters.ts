@@ -1,48 +1,56 @@
-/**
- * Currency & Number formatters tailored for Uzbekistan Sum (UZS)
- */
-
-export function formatUZS(amount: number | null | undefined): string {
-  if (amount === null || amount === undefined || isNaN(amount)) {
-    return "0 so'm";
+export function formatUZS(amount: number): string {
+  if (isNaN(amount) || amount === null || amount === undefined) {
+    return '0 UZS';
   }
-  const formatted = new Intl.NumberFormat('uz-UZ').format(Math.round(amount));
-  return `${formatted} so'm`;
+  return new Intl.NumberFormat('uz-UZ').format(Math.round(amount)) + ' UZS';
 }
 
 export function formatShortUZS(amount: number): string {
-  if (!amount || isNaN(amount)) return "0";
-  if (Math.abs(amount) >= 1_000_000_000) {
-    return (amount / 1_000_000_000).toFixed(1) + ' mlrd';
+  if (!amount) return '0';
+  if (amount >= 1000000) {
+    return (amount / 1000000).toFixed(1) + ' mln';
   }
-  if (Math.abs(amount) >= 1_000_000) {
-    return (amount / 1_000_000).toFixed(1) + ' mln';
+  if (amount >= 1000) {
+    return Math.round(amount / 1000) + ' ming';
   }
-  if (Math.abs(amount) >= 1_000) {
-    return (amount / 1_000).toFixed(0) + ' ming';
-  }
-  return formatUZS(amount);
+  return String(amount);
 }
 
-export function formatDateUz(dateString: string): string {
+export function formatShortDate(dateStr: string): string {
+  if (!dateStr) return '';
   try {
-    const [year, month, day] = dateString.split('-').map(Number);
-    const monthsUz = [
-      'yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
-      'iyul', 'avgust', 'sentyabr', 'oktyabr', 'noyabr', 'dekabr'
-    ];
-    if (day && month && year) {
-      return `${day}-${monthsUz[month - 1]}, ${year}`;
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}.${parts[1]}.${parts[0]}`;
     }
-    const d = new Date(dateString);
-    return `${d.getDate()}-${monthsUz[d.getMonth()]}, ${d.getFullYear()}`;
+    return dateStr;
   } catch {
-    return dateString;
+    return dateStr;
+  }
+}
+
+export function formatDateUz(dateStr: string): string {
+  return formatShortDate(dateStr);
+}
+
+export function formatDateTime(isoString?: string): string {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    return d.toLocaleString('uz-UZ', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return isoString;
   }
 }
 
 export function getDaysRemainingInMonth(): number {
   const now = new Date();
   const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  return Math.max(1, lastDay - now.getDate());
+  return lastDay - now.getDate();
 }

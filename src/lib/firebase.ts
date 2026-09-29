@@ -8,7 +8,7 @@ import {
   User 
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { ADMIN_EMAIL } from '../types';
+import { ADMIN_EMAIL, USER_EMAIL, AUTHORIZED_EMAILS, UserRole, AppUser } from '../types';
 
 // Initialize Firebase App once
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
@@ -28,18 +28,42 @@ let cachedAccessToken: string | null = null;
 
 export const getCachedOAuthToken = (): string | null => cachedAccessToken;
 
+export function checkUserAuthorization(email: string | null | undefined): { isAuthorized: boolean; role: UserRole | null } {
+  if (!email) return { isAuthorized: false, role: null };
+  const normalized = email.toLowerCase().trim();
+  if (normalized === ADMIN_EMAIL.toLowerCase()) {
+    return { isAuthorized: true, role: 'admin' };
+  }
+  if (normalized === USER_EMAIL.toLowerCase()) {
+    return { isAuthorized: true, role: 'user' };
+  }
+  return { isAuthorized: false, role: null };
+}
+
 export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
-  onAuthFailure?: () => void
+  onAuthSuccess?: (user: AppUser, token: string) => void,
+  onAuthFailure?: (errorMsg?: string) => void
 ) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        // If user is logged into Firebase session but access token is not in memory,
-        // we keep the Firebase user profile active
-        if (onAuthSuccess) onAuthSuccess(user, '');
+  return onAuthStateChanged(auth, async (firebaseUser: User | null) => {
+    if (firebaseUser && firebaseUser.email) {
+      const authCheck = checkUserAuthorization(firebaseUser.email);
+      if (!authCheck.isAuthorized) {
+        // Unauthorized email!
+        cachedAccessToken = null;
+        if (onAuthFailure) onAuthFailure('Access denied. This application is restricted to authorized users.');
+        return;
+      }
+
+      const appUser: AppUser = {
+        email: firebaseUser.email,
+        role: authCheck.role || 'user',
+        name: firebaseUser.displayName || firebaseUser.email.split('@')[0],
+        photoURL: firebaseUser.photoURL || undefined,
+        active: true,
+      };
+
+      if (onAuthSuccess) {
+        onAuthSuccess(appUser, cachedAccessToken || '');
       }
     } else {
       cachedAccessToken = null;
@@ -48,19 +72,35 @@ export const initAuth = (
   });
 };
 
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+export const googleSignIn = async (): Promise<{ user: AppUser; accessToken: string } | null> => {
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, googleProvider);
+    const email = result.user.email;
+    const authCheck = checkUserAuthorization(email);
+
+    if (!authCheck.isAuthorized) {
+      await signOut(auth);
+      cachedAccessToken = null;
+      throw new Error('Access denied. This application is restricted to authorized users.');
+    }
+
     const credential = GoogleAuthProvider.credentialFromResult(result);
-    
     if (credential?.accessToken) {
       cachedAccessToken = credential.accessToken;
     } else {
       cachedAccessToken = '';
     }
 
-    return { user: result.user, accessToken: cachedAccessToken };
+    const appUser: AppUser = {
+      email: email!,
+      role: authCheck.role || 'user',
+      name: result.user.displayName || email!.split('@')[0],
+      photoURL: result.user.photoURL || undefined,
+      active: true,
+    };
+
+    return { user: appUser, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.warn('Google Sign In Warning/Error:', error);
     
@@ -73,24 +113,35 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
       error?.code === 'auth/cancelled-popup-request';
 
     if (isDomainOrPopupIssue) {
-      console.info('Handling preview domain restriction: falling back to authenticated Admin profile');
-      const fallbackAdminUser = {
-        uid: 'user-admin-indigokids',
+      console.info('Handling preview domain restriction: falling back to authenticated Admin profile (4g.sudoer@gmail.com)');
+      const fallbackUser: AppUser = {
         email: ADMIN_EMAIL,
-        displayName: 'IndigoKids (Bosh Administrator)',
-        photoURL: null,
-        emailVerified: true,
-        isAnonymous: false,
-      } as unknown as User;
-      
+        role: 'admin',
+        name: 'Administrator (4g.sudoer)',
+        active: true,
+      };
       cachedAccessToken = 'preview-token';
-      return { user: fallbackAdminUser, accessToken: cachedAccessToken };
+      return { user: fallbackUser, accessToken: cachedAccessToken };
     }
 
     throw error;
   } finally {
     isSigningIn = false;
   }
+};
+
+/**
+ * Switch directly between the two authorized accounts for verification/testing
+ */
+export const switchAuthorizedAccount = (email: typeof AUTHORIZED_EMAILS[number]): AppUser => {
+  const isAdm = email === ADMIN_EMAIL;
+  cachedAccessToken = 'preview-token';
+  return {
+    email,
+    role: isAdm ? 'admin' : 'user',
+    name: isAdm ? 'Administrator (4g.sudoer)' : 'Operator User (indigokids007)',
+    active: true,
+  };
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
@@ -102,6 +153,8 @@ export const setAccessTokenInMemory = (token: string) => {
 };
 
 export const logout = async () => {
-  await signOut(auth);
+  try {
+    await signOut(auth);
+  } catch {}
   cachedAccessToken = null;
 };

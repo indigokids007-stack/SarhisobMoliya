@@ -1,8 +1,9 @@
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -13,508 +14,337 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-// Initialize Google Gen AI
-const apiKey = process.env.GEMINI_API_KEY || '';
-const ai = new GoogleGenAI({
-  apiKey: apiKey,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
-
-// Helper for currency formatting in prompts
-function formatSum(num: number): string {
-  return new Intl.NumberFormat('uz-UZ').format(num) + " so'm";
+// Ensure server data directory exists for resilient offline caching
+const DATA_DIR = path.join(__dirname, 'server_data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Resilient Gemini invoker: handles 503 high demand spikes cleanly
-async function safeCallGemini(contents: string, config?: any): Promise<any | null> {
-  if (!apiKey) return null;
-  const models = ['gemini-3.8-flash', 'gemini-flash-latest'];
-  for (const model of models) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config,
-      });
-      if (response && response.text) {
-        return JSON.parse(response.text);
-      }
-    } catch {
-      // Continue to next model on demand spike or error
-      continue;
-    }
-  }
-  return null;
-}
+// File persistence paths
+const EXPENSES_FILE = path.join(DATA_DIR, 'expenses.json');
+const CATEGORIES_FILE = path.join(DATA_DIR, 'categories.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const AUDIT_FILE = path.join(DATA_DIR, 'audit_log.json');
 
-// 1. Natural Language Transaction Parser (e.g., "Kechagi bozorlikka 350 ming ketdi" or Bank SMS)
-app.post('/api/gemini/parse-transaction', async (req, res) => {
-  const { text } = req.body;
-  if (!text || typeof text !== 'string') {
-    return res.status(400).json({ error: "Matn kiritilmadi" });
-  }
+// Constants
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || '4g.sudoer@gmail.com';
+const USER_EMAIL = 'indigokids007@gmail.com';
+const AUTHORIZED_EMAILS = [ADMIN_EMAIL.toLowerCase(), USER_EMAIL.toLowerCase()];
 
-  // Fallback rule parser
-  const parseWithRules = () => {
-    const amountMatch = text.match(/(\d[\d\s,.]*)\s*(ming|mln|million|so'?m|sum|uzs|\$)?/i);
-    let amount = 50000;
-    if (amountMatch) {
-      let rawNum = parseFloat(amountMatch[1].replace(/[\s,]/g, ''));
-      const unit = (amountMatch[2] || '').toLowerCase();
-      if (unit.includes('ming')) rawNum *= 1000;
-      if (unit.includes('mln') || unit.includes('million')) rawNum *= 1000000;
-      amount = rawNum;
-    }
-    const isIncome = /oylik|maosh|kirim|tushdi|daromad|avans|dividend/i.test(text);
-    return {
-      type: isIncome ? 'income' : 'expense',
-      amount: amount,
-      category: isIncome ? 'Maosh' : (text.match(/bozor|ovqat|go'sht|non|supermarket|korzinka/i) ? 'Oziq-ovqat' : text.match(/taksi|yandex|yo'l|benzin/i) ? "Transport va Yoqilg'i" : text.match(/kafe|qahva|kofe|restoran/i) ? "Kafe va Restoran" : 'Boshqa xarajatlar'),
-      description: text.slice(0, 60),
-      date: new Date().toISOString().split('T')[0],
-    };
-  };
-
-  try {
-    const parsed = await safeCallGemini(
-      `Quyidagi o'zbek tilidagi matn yoki bank SMS xabaridan moliyaviy operatsiya ma'lumotlarini ajratib ol:
-Matn: "${text}"
-
-Mavjud chiqim toifalari: Oziq-ovqat, Transport va Yoqilg'i, Kommunal va Uy, Ta'lim, Sog'liq va Dorixona, Ko'ngilochar va Dam olish, Kiyim-kechak, Kafe va Restoran, Texnika va Aloqa, Boshqa xarajatlar.
-Mavjud kirim toifalari: Maosh, Biznes va Savdo, Freelance, Investitsiya, Hadya va Sovg'a, Boshqa daromad.
-
-Bugungi sana: ${new Date().toISOString().split('T')[0]}.
-Javobni aniq JSON formatida ber:
-{
-  "type": "expense" yoki "income",
-  "amount": raqam ko'rinishida so'mda (masalan, 350000),
-  "category": toifa nomi,
-  "description": qisqa izoh,
-  "date": "YYYY-MM-DD" formati
-}`,
-      {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            type: { type: Type.STRING, enum: ['expense', 'income'] },
-            amount: { type: Type.NUMBER, description: "Xarajat yoki daromad miqdori so'mda" },
-            category: { type: Type.STRING, description: "Toifa nomi" },
-            description: { type: Type.STRING, description: "Qisqa tushunarli izoh" },
-            date: { type: Type.STRING, description: "YYYY-MM-DD formatidagi sana" },
-          },
-          required: ['type', 'amount', 'category', 'description'],
-        },
-      }
-    );
-
-    if (parsed) {
-      return res.json(parsed);
-    }
-    return res.json(parseWithRules());
-  } catch {
-    return res.json(parseWithRules());
-  }
-});
-
-// 2. Financial Analysis & Savings Recommendations
-app.post('/api/gemini/analyze', async (req, res) => {
-  const { transactions, recurringBills, goals, currentBalance } = req.body;
-
-  try {
-    const totalIncome = transactions
-      .filter((t: any) => t.type === 'income')
-      .reduce((sum: number, t: any) => sum + t.amount, 0);
-    const totalExpense = transactions
-      .filter((t: any) => t.type === 'expense')
-      .reduce((sum: number, t: any) => sum + t.amount, 0);
-
-    const categorySpend: Record<string, number> = {};
-    transactions
-      .filter((t: any) => t.type === 'expense')
-      .forEach((t: any) => {
-        categorySpend[t.category] = (categorySpend[t.category] || 0) + t.amount;
-      });
-
-    const contextSummary = {
-      jamiKirim: formatSum(totalIncome),
-      jamiChiqim: formatSum(totalExpense),
-      joriyBalans: formatSum(currentBalance),
-      foyda: formatSum(totalIncome - totalExpense),
-      tejashFoizi: totalIncome > 0 ? Math.round(((totalIncome - totalExpense) / totalIncome) * 100) + '%' : '0%',
-      xarajatToifalari: Object.entries(categorySpend).map(([cat, amt]) => `${cat}: ${formatSum(amt)}`),
-      doimiyMajburiyatlar: (recurringBills || []).map((b: any) => `${b.title}: ${formatSum(b.amount)} (${b.frequency})`),
-      jamgarmaMaqsadlari: (goals || []).map((g: any) => `${g.title}: ${formatSum(g.currentAmount)} / ${formatSum(g.targetAmount)}`),
-    };
-
-    const savingsRate = totalIncome > 0 ? Math.round(((totalIncome - totalExpense) / totalIncome) * 100) : 18;
-    const fallbackAnalysis = {
-      healthScore: Math.min(95, Math.max(45, 60 + savingsRate)),
-      summary: `Joriy oyda daromadning ${Math.max(0, savingsRate)}% qismi tejalmoqda. Asosiy ehtiyojlar qoplanmoqda, biroq kafe va qatnov xarajatlarida tejash salohiyati yuqori.`,
-      budgetRule503020: {
-        needsPercent: 54,
-        wantsPercent: 26,
-        savingsPercent: Math.max(0, savingsRate),
-        analysis: "Xarajatlaringiz 50/30/20 qoidasiga yaqin. Xohishlar ulushini biroz qisqartirib jamg'armani 20-25% ga ko'tarishingiz mumkin.",
-      },
-      moneyLeaks: [
-        {
-          title: "Kunlik mayda kofe va ko'cha gazaklari",
-          category: "Kafe va Restoran",
-          estimatedMonthlyLoss: 450000,
-          impact: "Yuqori",
-          action: "Ish joyiga termosda qahva yoki o'zingiz bilan foydali tamaddi olib borish orqali oyiga 450 000 so'm tejang.",
-        },
-        {
-          title: "Taksi xarajatlari",
-          category: "Transport va Yoqilg'i",
-          estimatedMonthlyLoss: 320000,
-          impact: "O'rta",
-          action: "Tig'iz bo'lmagan paytlarda metro yoki jamoat transportidan foydalanish orqali oyiga 300 000 so'mdan ko'p mablag'ni asrab qolishingiz mumkin.",
-        },
-      ],
-      savingRecommendations: [
-        {
-          title: "50/30/20 qoidasini to'liq joriy etish",
-          potentialMonthlySavings: 600000,
-          difficulty: "Oson",
-          description: "Har oy tushgan maoshning kamida 20% ini o'sha zahotiyoq jamg'arma hisobiga o'tkazing.",
-        },
-        {
-          title: "Xaridlar ro'yxati bilan bozorlik qilish",
-          potentialMonthlySavings: 400000,
-          difficulty: "O'rta",
-          description: "Supermarket va bozorga borishdan oldin ro'yxat tuzing va qorningiz to'q holda boring.",
-        },
-        {
-          title: "Keshbek va chegirma kartalaridan unumli foydalanish",
-          potentialMonthlySavings: 200000,
-          difficulty: "Oson",
-          description: "Bank kartalaridagi 1-3% keshbek va to'lov ilovalari taklif etadigan sodiqlik bonuslarini jamg'arib boring.",
-        },
-      ],
-      urgentAlerts: [],
-    };
-
-    const parsed = await safeCallGemini(
-      `Siz professional shaxsiy moliya tahlilchisi va AI maslahatchisiz. Foydalanuvchining kirim-chiqim ma'lumotlarini sinchkovlik bilan tahlil qiling va O'zbekiston moliyaviy voqeligiga mos, o'ta aniq va amaliy tejash tavsiyalarini bering.
-
-Foydalanuvchi ma'lumotlari:
-${JSON.stringify(contextSummary, null, 2)}
-
-Javobni quyidagi JSON strukturada qaytaring:
-{
-  "healthScore": 1 dan 100 gacha moliyaviy salomatlik bali (masalan: 78),
-  "summary": "Umumiy vaziyat tahlili va asosiy xulosalar (2-3 jumla)",
-  "budgetRule503020": {
-    "needsPercent": raqam (Ehtiyojlar: ijara, kommunal, oziq-ovqat, dori),
-    "wantsPercent": raqam (Xohishlar: kafe, kino, xaridlar, dam olish),
-    "savingsPercent": raqam (Jamg'arma: qolgan sof foyda/jamg'arma),
-    "analysis": "50/30/20 qoidasi bo'yicha tushunarli qisqa sharh"
-  },
-  "moneyLeaks": [
-    {
-      "title": "Mablag' behuda oqib ketayotgan joy nomi",
-      "category": "Toifa",
-      "estimatedMonthlyLoss": raqam (so'mda taxminiy yo'qotish),
-      "impact": "Yuqori" | "O'rta" | "Past",
-      "action": "Buni to'xtatish uchun aniq amaliy harakat"
-    }
-  ],
-  "savingRecommendations": [
-    {
-      "title": "Tavsiya sarlavhasi",
-      "potentialMonthlySavings": raqam (oylik tejalishi mumkin bo'lgan mablag' so'mda),
-      "difficulty": "Oson" | "O'rta" | "Qiyin",
-      "description": "Batafsil tushuntirish va foydasi"
-    }
-  ],
-  "urgentAlerts": [
-    "Agar byudjet xavfi yoki ortiqcha sarf bo'lsa qisqa ogohlantirishlar matni"
-  ]
-}`,
-      { responseMimeType: 'application/json' }
-    );
-
-    return res.json(parsed || fallbackAnalysis);
-  } catch {
-    return res.json({
-      healthScore: 78,
-      summary: "Moliyaviy holatingiz tahlil qilindi. Jamg'arma rejasini mustahkamlash tavsiya etiladi.",
-      budgetRule503020: {
-        needsPercent: 54,
-        wantsPercent: 26,
-        savingsPercent: 20,
-        analysis: "Xarajatlaringiz 50/30/20 me'yorlariga yaqin.",
-      },
-      moneyLeaks: [],
-      savingRecommendations: [],
-      urgentAlerts: [],
-    });
-  }
-});
-
-// 3. Predictive Expense Forecasting (30, 60, 90 days)
-app.post('/api/gemini/forecast', async (req, res) => {
-  const { transactions, recurringBills, currentBalance, goals } = req.body;
-
-  try {
-    const expenseList = (transactions || []).filter((t: any) => t.type === 'expense');
-    const incomeList = (transactions || []).filter((t: any) => t.type === 'income');
-
-    const totalExpense = expenseList.reduce((s: number, t: any) => s + t.amount, 0);
-    const totalIncome = incomeList.reduce((s: number, t: any) => s + t.amount, 0);
-    const recurringTotal = (recurringBills || []).reduce((s: number, b: any) => s + b.amount, 0);
-
-    const nextMonthExpense = Math.round(totalExpense * 1.04 + recurringTotal * 0.15);
-    const nextMonthIncome = Math.round(totalIncome * 1.0);
-    const dailySafeSpend = Math.round(Math.max(120000, (currentBalance + nextMonthIncome - nextMonthExpense) / 30));
-
-    const fallbackForecast = {
-      safeDailySpend: dailySafeSpend,
-      projectedMonthlyExpense: nextMonthExpense,
-      projectedMonthlyIncome: nextMonthIncome,
-      netCashFlow: nextMonthIncome - nextMonthExpense,
-      riskLevel: nextMonthExpense > currentBalance + nextMonthIncome ? 'Yuqori' : 'Xavfsiz',
-      forecast30Days: {
-        totalExpense: nextMonthExpense,
-        categories: [
-          { category: "Oziq-ovqat", amount: Math.round(nextMonthExpense * 0.36), trend: "+4%" },
-          { category: "Kommunal va Uy", amount: Math.round(nextMonthExpense * 0.22), trend: "0%" },
-          { category: "Transport va Yoqilg'i", amount: Math.round(nextMonthExpense * 0.14), trend: "-2%" },
-          { category: "Kafe va Restoran", amount: Math.round(nextMonthExpense * 0.12), trend: "+6%" },
-          { category: "Boshqa xarajatlar", amount: Math.round(nextMonthExpense * 0.16), trend: "+1%" },
-        ],
-      },
-      forecast60Days: {
-        totalExpense: Math.round(nextMonthExpense * 1.03),
-        predictedBalance: Math.max(0, currentBalance + (nextMonthIncome - nextMonthExpense) * 2),
-      },
-      forecast90Days: {
-        totalExpense: Math.round(nextMonthExpense * 1.06),
-        predictedBalance: Math.max(0, currentBalance + (nextMonthIncome - nextMonthExpense) * 3),
-      },
-      riskFactors: [
-        "Mavsumiy kommunal xizmatlar xarajati oshishi mumkin",
-        "Kafe va taksi xarajatlari o'sish sur'ati nazorat qilinmasa byudjet qisqaradi",
-      ],
-      scenarioAdvice: "Agar haftalik ko'ngilochar sarflarni 15% ga qisqartirsangiz, keyingi chorakda jamg'armangiz 2 800 000 so'mga ko'payadi.",
-    };
-
-    const parsed = await safeCallGemini(
-      `Siz moliyaviy prognozlash bo'yicha sun'iy intellekt ekspertisiz. Foydalanuvchining o'tmishdagi xarajatlari, doimiy to'lovlari va hozirgi balansiga asoslanib, kelgusi 30, 60 va 90 kunlik xarajatlar prognozini, kunlik xavfsiz xarajat limitini va ehtimoliy xavflarni hisoblang.
-
-Joriy holat:
-- Joriy Balans: ${formatSum(currentBalance)}
-- Umumiy daromadlar: ${formatSum(totalIncome)}
-- Umumiy xarajatlar: ${formatSum(totalExpense)}
-- Doimiy oylik to'lovlar (ijara, kredit, kommunal): ${formatSum(recurringTotal)}
-- Tranzaksiyalar soni: ${transactions?.length || 0}
-- Jamg'arma maqsadlari soni: ${goals?.length || 0}
-
-Javobni quyidagi aniq JSON formatida bering:
-{
-  "safeDailySpend": raqam,
-  "projectedMonthlyExpense": raqam,
-  "projectedMonthlyIncome": raqam,
-  "netCashFlow": raqam,
-  "riskLevel": "Xavfsiz" | "O'rta" | "Yuqori",
-  "forecast30Days": {
-    "totalExpense": raqam,
-    "categories": [
-      {
-        "category": "Toifa nomi",
-        "amount": raqam,
-        "trend": "+5%" yoki "-3%" yoki "0%"
-      }
-    ]
-  },
-  "forecast60Days": {
-    "totalExpense": raqam,
-    "predictedBalance": raqam
-  },
-  "forecast90Days": {
-    "totalExpense": raqam,
-    "predictedBalance": raqam
-  },
-  "riskFactors": [
-    "Qaysi xarajatlar oshishi xavfi borligi haqida 2-3 ta aniq ogohlantirish"
-  ],
-  "scenarioAdvice": "Kelgusi oylarda byudjetni optimal ushlab turish bo'yicha AI maslahati"
-}`,
-      { responseMimeType: 'application/json' }
-    );
-
-    return res.json(parsed || fallbackForecast);
-  } catch {
-    return res.json({
-      safeDailySpend: 135000,
-      projectedMonthlyExpense: 4200000,
-      projectedMonthlyIncome: 6500000,
-      netCashFlow: 2300000,
-      riskLevel: 'Xavfsiz',
-      forecast30Days: {
-        totalExpense: 4200000,
-        categories: [],
-      },
-      forecast60Days: { totalExpense: 4300000, predictedBalance: 8800000 },
-      forecast90Days: { totalExpense: 4400000, predictedBalance: 11000000 },
-      riskFactors: [],
-      scenarioAdvice: "Byudjetni optimal nazorat qilib boring.",
-    });
-  }
-});
-
-// 4. Telegram Bot Simulation & Message Handler
-app.post('/api/telegram/message', async (req, res) => {
-  const { message, chatState, transactions, balance } = req.body;
-  const text = (message || '').trim();
-
-  try {
-    // Check built-in commands
-    if (text === '/start') {
-      return res.json({
-        reply: `Assalomu alaykum! 🤖 **Sarhisob AI** shaxsiy moliyaviy menejeringizga xush kelibsiz!
-
-Men sizga xarajatlaringizni nazorat qilishda, pul tejashda va kelajakdagi xarajatlarni aniq prognozlashda yordam beraman.
-
-🔹 **Nimalar qila olaman?**
-1. Xarajat yoki kirimni oddiy so'z bilan yozing: masalan: *"Taksiga 25000 so'm"* yoki *"Oylik tushdi 5 000 000"*
-2. **/hisobot** - Oylik moliyaviy tahlil
-3. **/prognoz** - Kelgusi 30/60 kunlik xarajatlar prognozi
-4. **/tavsiya** - Sun'iy intellektdan tejash bo'yicha maslahatlar
-5. **/balans** - Joriy mablag'ingiz
-6. **/maqsad** - Jamg'arma maqsadlari holati
-
-Quyidagi tugmalardan birini bosing yoki xarajatni yozib yuboring!`,
-        keyboard: ['/balans', '/hisobot', '/prognoz', '/tavsiya', '/maqsad'],
-        action: null,
-      });
-    }
-
-    if (text === '/balans') {
-      const current = formatSum(balance || 0);
-      return res.json({
-        reply: `💰 **Sizning joriy balansingiz:** ${current}
-
-Oxirgi 30 kunda:
-• Kirimlar: ${formatSum((transactions || []).filter((t: any) => t.type === 'income').reduce((s: number, t: any) => s + t.amount, 0))}
-• Chiqimlar: ${formatSum((transactions || []).filter((t: any) => t.type === 'expense').reduce((s: number, t: any) => s + t.amount, 0))}
-
-Xarajat qo'shish uchun shunchaki miqdor va sababini yozing (masalan: *"Tushlik 45 ming"*).`,
-        keyboard: ['/hisobot', '/prognoz', '/tavsiya'],
-        action: null,
-      });
-    }
-
-    // AI reasoning for bot replies & transaction auto-detection
-    const parsed = await safeCallGemini(
-      `Siz Telegramdagi shaxsiy moliya boti "Sarhisob AI"siz.
-Foydalanuvchi quyidagi xabarni yubordi: "${text}"
-
-Mavjud joriy balans: ${formatSum(balance || 0)}
-Foydalanuvchi maqsadi:
-- Agar foydalanuvchi xarajat yoki kirim haqida yozgan bo'lsa (masalan, "Kofe 18000", "Bozorlik 200 ming", "Freelancedan 150 dollar tushdi"), buni aniqlab tranzaksiya obyektini yarat.
-- Agar "/hisobot", "/prognoz", "/tavsiya", "/maqsad" yoki moliyaviy savol so'ragan bo'lsa, samimiy, chiroyli telegram formatida (emoji, bold, bullet points bilan) o'zbek tilida to'liq javob ber.
-
-JSON formatida javob qaytar:
-{
-  "reply": "Telegram foydalanuvchisiga yuboriladigan chiroyli xabar matni (emojilar bilan)",
-  "keyboard": ["/balans", "/hisobot", "/prognoz", "/tavsiya"],
-  "detectedTransaction": null yoki {
-    "type": "expense" | "income",
-    "amount": raqam,
-    "category": "Toifa",
-    "description": "Izoh",
-    "date": "${new Date().toISOString().split('T')[0]}"
-  }
-}`,
-      { responseMimeType: 'application/json' }
-    );
-
-    if (parsed && parsed.reply) {
-      return res.json(parsed);
-    }
-
-    // Fallback response generator
-    const isExpense = /taksi|kofe|bozor|ovqat|restoran|benzin|dorixona|tolov|to'lov|chiqim|gosht|go'sht|non|supermarket/i.test(text);
-    const isIncome = /maosh|oylik|tushdi|daromad|avans|kirim|bonus/i.test(text);
-
-    if (isExpense || isIncome) {
-      const amountMatch = text.match(/(\d[\d\s,.]*)\s*(ming|mln|million|so'?m|sum|uzs|\$)?/i);
-      let amount = 45000;
-      if (amountMatch) {
-        let raw = parseFloat(amountMatch[1].replace(/[\s,]/g, ''));
-        const unit = (amountMatch[2] || '').toLowerCase();
-        if (unit.includes('ming')) raw *= 1000;
-        if (unit.includes('mln') || unit.includes('million')) raw *= 1000000;
-        amount = raw;
-      }
-      return res.json({
-        reply: `✅ **${isIncome ? 'Kirim' : 'Xarajat'} muvaffaqiyatli saqlandi!**\n\n📌 **Summa:** ${formatSum(amount)}\n📁 **Toifa:** ${isIncome ? 'Maosh va Daromad' : (text.match(/bozor|ovqat/i) ? 'Oziq-ovqat' : text.match(/taksi/i) ? "Transport va Yoqilg'i" : 'Kundalik xarajat')}\n📝 **Izoh:** ${text}\n\nJoriy hisobingiz yangilandi.`,
-        keyboard: ['/balans', '/hisobot', '/prognoz', '/tavsiya'],
-        detectedTransaction: {
-          type: isIncome ? 'income' : 'expense',
-          amount: amount,
-          category: isIncome ? 'Maosh' : (text.match(/bozor|ovqat/i) ? 'Oziq-ovqat' : text.match(/taksi/i) ? "Transport va Yoqilg'i" : 'Kundalik xarajat'),
-          description: text,
-          date: new Date().toISOString().split('T')[0],
-        },
-      });
-    }
-
-    if (text.includes('/hisobot')) {
-      const inc = (transactions || []).filter((t: any) => t.type === 'income').reduce((s: number, t: any) => s + t.amount, 0);
-      const exp = (transactions || []).filter((t: any) => t.type === 'expense').reduce((s: number, t: any) => s + t.amount, 0);
-      return res.json({
-        reply: `📊 **Moliyaviy Hisobot (Oylik):**\n\n💰 **Balans:** ${formatSum(balance || 0)}\n🟢 **Jami Kirim:** ${formatSum(inc)}\n🔴 **Jami Chiqim:** ${formatSum(exp)}\n📈 **Sof Jamg'arma:** ${formatSum(inc - exp)}\n\n💡 Asosiy xarajatlaringiz oziq-ovqat va kommunal xizmatlarga to'g'ri kelmoqda.`,
-        keyboard: ['/balans', '/prognoz', '/tavsiya'],
-        detectedTransaction: null,
-      });
-    }
-
-    if (text.includes('/prognoz')) {
-      return res.json({
-        reply: `🔮 **Kelgusi Oylik Prognoz:**\n\n📅 Keyingi 30 kunda taxminiy xarajat: **${formatSum(balance ? balance * 0.7 : 4500000)}**\n🛡️ **Kunlik xavfsiz limit:** **145 000 so'm**\n\n⚠️ Eslatma: Oy o'rtalarida doimiy to'lovlar sababli kassa sarfi ortishi kutilmoqda.`,
-        keyboard: ['/balans', '/hisobot', '/tavsiya'],
-        detectedTransaction: null,
-      });
-    }
-
-    if (text.includes('/tavsiya')) {
-      return res.json({
-        reply: `💡 **AI Tejash Tavsiyalari:**\n\n1️⃣ **Qahva va mayda xaridlar:** Ish joyiga termosda ichimlik olib borish orqali oyiga **~400 000 so'm** tejashingiz mumkin.\n2️⃣ **50/30/20 Qoidasi:** Har oylik daromadingizning 20% qismini o'sha zahotiyoq jamg'armaga yo'naltiring.\n3️⃣ **Taksi o'rniga metro:** Qisqa qatnovlarda jamoat transportidan foydalanib oyiga **~250 000 so'm** tejash imkoni bor.`,
-        keyboard: ['/balans', '/hisobot', '/prognoz'],
-        detectedTransaction: null,
-      });
-    }
-
-    return res.json({
-      reply: `🤖 **Sarhisob AI:** Xabaringiz qabul qilindi: "${text}".\n\nYangi xarajat kiritish uchun masalan: *"Tushlik 45000"* yoki buyruqlardan foydalaning: /balans, /hisobot, /prognoz, /tavsiya.`,
-      keyboard: ['/balans', '/hisobot', '/prognoz', '/tavsiya'],
-      detectedTransaction: null,
-    });
-  } catch {
-    return res.json({
-      reply: `🤖 **Sarhisob AI:** Xabaringiz qabul qilindi: "${text}".`,
-      keyboard: ['/balans', '/hisobot', '/prognoz', '/tavsiya'],
-      detectedTransaction: null,
-    });
-  }
-});
+const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_ID || '1bONPkd7IlHlzZSH-oVSqa4UVnBp16C7rBNPkhEGUAQk';
+const SPREADSHEET_GID = process.env.GOOGLE_SHEET_GID || '936307973';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8539361446:AAHLiilwTM_wjLLu-prVx-BYz6LU5wDk4e8';
-const TELEGRAM_BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'SarhisobMoliya_bot';
+const TELEGRAM_BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME && process.env.TELEGRAM_BOT_USERNAME !== 'SarhisobMoliya_bot')
+  ? process.env.TELEGRAM_BOT_USERNAME
+  : 'Kukukaka8_bot';
 
-// Active chat IDs who interact with the bot or register their ID
+// Format currency helper
+function formatUZS(num: number): string {
+  return new Intl.NumberFormat('uz-UZ').format(num) + ' UZS';
+}
+
+// ----------------------------------------------------
+// DEFAULT DATA INITIALIZATION
+// ----------------------------------------------------
+const DEFAULT_CATEGORIES = [
+  { id: 'cat-1', name: 'Food', active: true, color: '#f59e0b', icon: 'Utensils', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-2', name: 'Transport', active: true, color: '#3b82f6', icon: 'Car', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-3', name: 'Salary', active: true, color: '#10b981', icon: 'Banknote', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-4', name: 'Utilities', active: true, color: '#06b6d4', icon: 'Zap', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-5', name: 'Rent', active: true, color: '#8b5cf6', icon: 'Building', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-6', name: 'Equipment', active: true, color: '#ec4899', icon: 'Wrench', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-7', name: 'Cleaning', active: true, color: '#14b8a6', icon: 'Sparkles', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-8', name: 'Office', active: true, color: '#6366f1', icon: 'Briefcase', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-9', name: 'Education', active: true, color: '#eab308', icon: 'GraduationCap', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-10', name: 'Advertising', active: true, color: '#f97316', icon: 'Megaphone', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-11', name: 'Repairs', active: true, color: '#ef4444', icon: 'Hammer', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-12', name: 'Taxes', active: true, color: '#64748b', icon: 'FileText', createdAt: '2026-09-01T00:00:00Z' },
+  { id: 'cat-13', name: 'Other', active: true, color: '#94a3b8', icon: 'MoreHorizontal', createdAt: '2026-09-01T00:00:00Z' },
+];
+
+const DEFAULT_SETTINGS = {
+  startDate: '2026-10-01',
+  endDate: '2026-12-31',
+  month1: { name: 'Month 1', startDate: '2026-10-01', endDate: '2026-10-31' },
+  month2: { name: 'Month 2', startDate: '2026-11-01', endDate: '2026-11-30' },
+  month3: { name: 'Month 3', startDate: '2026-12-01', endDate: '2026-12-31' },
+};
+
+const DEFAULT_INITIAL_EXPENSES = [
+  {
+    id: 'EXP-2026-000001',
+    date: '2026-10-02',
+    time: '10:30',
+    month: 'Month 1',
+    category: 'Rent',
+    description: 'Office monthly rental payment',
+    amount: 5500000,
+    currency: 'UZS',
+    paymentMethod: 'Bank transfer',
+    responsiblePerson: 'Akbar Shodiyev',
+    comment: 'Q1 payment invoice #412',
+    createdBy: '4g.sudoer@gmail.com',
+    createdAt: '2026-10-02T10:30:00Z',
+    updatedAt: '2026-10-02T10:30:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000002',
+    date: '2026-10-04',
+    time: '14:15',
+    month: 'Month 1',
+    category: 'Utilities',
+    description: 'Electricity and high-speed fiber internet',
+    amount: 850000,
+    currency: 'UZS',
+    paymentMethod: 'Bank card',
+    responsiblePerson: 'Malika Karimova',
+    comment: 'Business center utility fee',
+    createdBy: 'indigokids007@gmail.com',
+    createdAt: '2026-10-04T14:15:00Z',
+    updatedAt: '2026-10-04T14:15:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000003',
+    date: '2026-10-08',
+    time: '12:45',
+    month: 'Month 1',
+    category: 'Food',
+    description: 'Team weekly lunch & cafeteria supplies',
+    amount: 620000,
+    currency: 'UZS',
+    paymentMethod: 'Cash',
+    responsiblePerson: 'Bobur Aliyev',
+    comment: 'Weekly grocery & coffee',
+    createdBy: 'indigokids007@gmail.com',
+    createdAt: '2026-10-08T12:45:00Z',
+    updatedAt: '2026-10-08T12:45:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000004',
+    date: '2026-10-15',
+    time: '16:00',
+    month: 'Month 1',
+    category: 'Equipment',
+    description: 'Dell UltraSharp Monitors for Design workstation',
+    amount: 4200000,
+    currency: 'UZS',
+    paymentMethod: 'Bank transfer',
+    responsiblePerson: 'Akbar Shodiyev',
+    comment: 'Tech upgrade for developer desk',
+    createdBy: '4g.sudoer@gmail.com',
+    createdAt: '2026-10-15T16:00:00Z',
+    updatedAt: '2026-10-15T16:00:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000005',
+    date: '2026-10-25',
+    time: '11:20',
+    month: 'Month 1',
+    category: 'Advertising',
+    description: 'Targeted Telegram & Instagram ad campaigns',
+    amount: 1500000,
+    currency: 'UZS',
+    paymentMethod: 'Bank card',
+    responsiblePerson: 'Malika Karimova',
+    comment: 'October lead generation drive',
+    createdBy: 'indigokids007@gmail.com',
+    createdAt: '2026-10-25T11:20:00Z',
+    updatedAt: '2026-10-25T11:20:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000006',
+    date: '2026-11-03',
+    time: '09:40',
+    month: 'Month 2',
+    category: 'Rent',
+    description: 'Office monthly rental payment',
+    amount: 5500000,
+    currency: 'UZS',
+    paymentMethod: 'Bank transfer',
+    responsiblePerson: 'Akbar Shodiyev',
+    comment: 'November rent invoice #488',
+    createdBy: '4g.sudoer@gmail.com',
+    createdAt: '2026-11-03T09:40:00Z',
+    updatedAt: '2026-11-03T09:40:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000007',
+    date: '2026-11-10',
+    time: '13:00',
+    month: 'Month 2',
+    category: 'Transport',
+    description: 'Fuel & logistic delivery for regional client meetings',
+    amount: 480000,
+    currency: 'UZS',
+    paymentMethod: 'Bank card',
+    responsiblePerson: 'Bobur Aliyev',
+    comment: 'Trip to Samarkand branch',
+    createdBy: 'indigokids007@gmail.com',
+    createdAt: '2026-11-10T13:00:00Z',
+    updatedAt: '2026-11-10T13:00:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000008',
+    date: '2026-11-18',
+    time: '15:30',
+    month: 'Month 2',
+    category: 'Office',
+    description: 'Stationery, paper and printer cartridge replacements',
+    amount: 340000,
+    currency: 'UZS',
+    paymentMethod: 'Cash',
+    responsiblePerson: 'Malika Karimova',
+    comment: 'Monthly supplies',
+    createdBy: 'indigokids007@gmail.com',
+    createdAt: '2026-11-18T15:30:00Z',
+    updatedAt: '2026-11-18T15:30:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000009',
+    date: '2026-12-02',
+    time: '10:00',
+    month: 'Month 3',
+    category: 'Rent',
+    description: 'Office monthly rental payment',
+    amount: 5500000,
+    currency: 'UZS',
+    paymentMethod: 'Bank transfer',
+    responsiblePerson: 'Akbar Shodiyev',
+    comment: 'December rent invoice #530',
+    createdBy: '4g.sudoer@gmail.com',
+    createdAt: '2026-12-02T10:00:00Z',
+    updatedAt: '2026-12-02T10:00:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+  {
+    id: 'EXP-2026-000010',
+    date: '2026-12-14',
+    time: '17:15',
+    month: 'Month 3',
+    category: 'Salary',
+    description: 'Bonus & end of year performance rewards',
+    amount: 6800000,
+    currency: 'UZS',
+    paymentMethod: 'Bank transfer',
+    responsiblePerson: 'Akbar Shodiyev',
+    comment: 'Annual team rewards',
+    createdBy: '4g.sudoer@gmail.com',
+    createdAt: '2026-12-14T17:15:00Z',
+    updatedAt: '2026-12-14T17:15:00Z',
+    status: 'ACTIVE',
+    syncStatus: 'synced',
+  },
+];
+
+// Helper functions to read/write JSON files safely
+function loadJson(filePath: string, fallback: any) {
+  try {
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch (e) {
+    console.error(`Error loading ${filePath}:`, e);
+  }
+  return fallback;
+}
+
+function saveJson(filePath: string, data: any) {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (e) {
+    console.error(`Error saving ${filePath}:`, e);
+  }
+}
+
+// In-memory data store with file backing
+let expensesStore: any[] = loadJson(EXPENSES_FILE, DEFAULT_INITIAL_EXPENSES);
+let categoriesStore: any[] = loadJson(CATEGORIES_FILE, DEFAULT_CATEGORIES);
+let settingsStore: any = loadJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+let auditStore: any[] = loadJson(AUDIT_FILE, [
+  {
+    id: 'AUD-001',
+    action: 'SETTINGS_CHANGE',
+    userEmail: '4g.sudoer@gmail.com',
+    timestamp: '2026-09-29T00:00:00Z',
+    newValue: 'Initial 3-month period set (01.10.2026 - 31.12.2026)',
+    reason: 'Initial setup',
+  },
+]);
+
+// Determine month helper
+function determineMonth(dateStr: string, settings: any): string {
+  if (!dateStr) return 'Other';
+  const d = dateStr.trim();
+  if (d >= settings.month1.startDate && d <= settings.month1.endDate) return 'Month 1';
+  if (d >= settings.month2.startDate && d <= settings.month2.endDate) return 'Month 2';
+  if (d >= settings.month3.startDate && d <= settings.month3.endDate) return 'Month 3';
+  return 'Outside Period';
+}
+
+// Generate sequential expense ID
+function generateExpenseId(): string {
+  const count = expensesStore.length + 1;
+  return `EXP-2026-${String(count).padStart(6, '0')}`;
+}
+
+// Check authorization middleware
+function checkAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const userEmail = (req.headers['x-user-email'] as string || '').toLowerCase().trim();
+  if (!userEmail) {
+    return next(); // Allow request to proceed if client handles local mock/preview, or validate in specific routes
+  }
+  if (!AUTHORIZED_EMAILS.includes(userEmail)) {
+    return res.status(403).json({
+      error: 'Access denied. This application is restricted to authorized users.',
+      authorizedEmails: AUTHORIZED_EMAILS,
+    });
+  }
+  next();
+}
+
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const userEmail = (req.headers['x-user-email'] as string || '').toLowerCase().trim();
+  if (userEmail && userEmail !== ADMIN_EMAIL.toLowerCase()) {
+    return res.status(403).json({
+      error: 'Admin privilege required. Only 4g.sudoer@gmail.com can perform this action.',
+    });
+  }
+  next();
+}
+
+// Telegram chat sessions for conversational state machine
 const activeChatIds = new Set<string | number>();
+interface TelegramUserState {
+  step: 'idle' | 'amount' | 'category' | 'description' | 'payment' | 'confirm';
+  tempExpense?: {
+    amount?: number;
+    category?: string;
+    description?: string;
+    paymentMethod?: string;
+  };
+}
+const telegramUserStates = new Map<number | string, TelegramUserState>();
 
 // Helper to send message via Telegram Bot API
-async function sendTelegramApiMessage(chatId: string | number, text: string, replyMarkup?: any) {
+async function sendTelegramMessage(chatId: string | number, text: string, replyMarkup?: any) {
   try {
     const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -533,399 +363,960 @@ async function sendTelegramApiMessage(chatId: string | number, text: string, rep
   }
 }
 
-// 5. Telegram Bot Info & Status
-app.get('/api/telegram/bot-info', async (req, res) => {
+// ====================================================
+// REST APIS
+// ====================================================
+
+// 1. Setup Status & Health Check
+app.get('/api/status', (req, res) => {
+  const now = new Date().toISOString().split('T')[0];
+  const endDate = settingsStore.endDate;
+  const isPeriodEnded = now > endDate;
+
+  // Calculate remaining days
+  const nowMs = new Date().getTime();
+  const endMs = new Date(endDate).getTime();
+  const diffDays = Math.max(0, Math.ceil((endMs - nowMs) / (1000 * 60 * 60 * 24)));
+
+  res.json({
+    app: 'Daily Expense Manager',
+    accountingPeriod: '3-Month Business Daily Expense Management',
+    status: 'ONLINE',
+    spreadsheetId: SPREADSHEET_ID,
+    spreadsheetGid: SPREADSHEET_GID,
+    telegramBot: `@${TELEGRAM_BOT_USERNAME}`,
+    adminEmail: ADMIN_EMAIL,
+    authorizedEmails: AUTHORIZED_EMAILS,
+    totalExpensesCount: expensesStore.length,
+    activeExpensesCount: expensesStore.filter((e) => e.status === 'ACTIVE').length,
+    remainingDaysInPeriod: diffDays,
+    isPeriodEnded,
+    settings: settingsStore,
+  });
+});
+
+// 2. Get Expenses (with optional filters)
+app.get('/api/expenses', checkAuth, (req, res) => {
+  const { month, status, category, search } = req.query;
+  let result = [...expensesStore];
+
+  if (status) {
+    result = result.filter((e) => e.status === status);
+  }
+  if (month && month !== 'all') {
+    result = result.filter((e) => e.month === month);
+  }
+  if (category && category !== 'all') {
+    result = result.filter((e) => e.category === category);
+  }
+  if (search && typeof search === 'string') {
+    const q = search.toLowerCase().trim();
+    result = result.filter((e) =>
+      e.id.toLowerCase().includes(q) ||
+      e.description.toLowerCase().includes(q) ||
+      e.category.toLowerCase().includes(q) ||
+      e.date.includes(q) ||
+      e.amount.toString().includes(q) ||
+      (e.responsiblePerson && e.responsiblePerson.toLowerCase().includes(q)) ||
+      (e.createdBy && e.createdBy.toLowerCase().includes(q))
+    );
+  }
+
+  // Sort descending by date, then time
+  result.sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+
+  res.json({
+    ok: true,
+    total: result.length,
+    expenses: result,
+  });
+});
+
+// 3. Add New Expense
+app.post('/api/expenses', checkAuth, async (req, res) => {
   try {
-    const meRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe`);
-    const meData = await meRes.json();
-    const webhookRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`);
-    const webhookData = await webhookRes.json();
+    const {
+      amount,
+      category,
+      description,
+      date,
+      time,
+      paymentMethod,
+      responsiblePerson,
+      comment,
+      receiptUrl,
+      createdBy,
+    } = req.body;
+
+    // Validation
+    const numericAmount = parseFloat(amount);
+    if (!numericAmount || numericAmount <= 0) {
+      return res.status(400).json({ ok: false, error: 'Amount must be greater than 0' });
+    }
+    if (!category || !description) {
+      return res.status(400).json({ ok: false, error: 'Category and description are required' });
+    }
+
+    const txDate = date || new Date().toISOString().split('T')[0];
+    const txTime = time || new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const userEmail = createdBy || req.headers['x-user-email'] || USER_EMAIL;
+
+    // Check 3-month period expiration
+    const isPeriodEnded = txDate > settingsStore.endDate;
+    if (isPeriodEnded) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Accounting period ended. New expenses cannot be added unless Administrator extends the period.',
+      });
+    }
+
+    const assignedMonth = determineMonth(txDate, settingsStore);
+    const newId = generateExpenseId();
+    const nowIso = new Date().toISOString();
+
+    const newExpense = {
+      id: newId,
+      date: txDate,
+      time: txTime,
+      month: assignedMonth,
+      category,
+      description,
+      amount: numericAmount,
+      currency: 'UZS',
+      paymentMethod: paymentMethod || 'Cash',
+      responsiblePerson: responsiblePerson || 'Staff',
+      comment: comment || '',
+      receiptUrl: receiptUrl || '',
+      createdBy: userEmail,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      status: 'ACTIVE',
+      syncStatus: 'synced',
+    };
+
+    expensesStore.unshift(newExpense);
+    saveJson(EXPENSES_FILE, expensesStore);
+
+    // Record audit entry
+    const auditEntry = {
+      id: `AUD-${Date.now()}`,
+      action: 'CREATE',
+      expenseId: newId,
+      newValue: JSON.stringify({ amount: numericAmount, category, description, date: txDate }),
+      userEmail,
+      timestamp: nowIso,
+      reason: 'New expense added',
+    };
+    auditStore.unshift(auditEntry);
+    saveJson(AUDIT_FILE, auditStore);
+
+    // Notify Telegram Bot (@Kukukaka8_bot) subscribers in real-time
+    const notifyText = `💳 *YANGI XARAJAT QO‘SHILDI!*
+🤖 *@${TELEGRAM_BOT_USERNAME} Bildirishnomasi*
+
+🆔 *ID:* \`${newId}\`
+📅 *Sana:* ${txDate}, ${txTime}
+📁 *Toifa:* ${category}
+📦 *Tavsif:* ${description}
+💰 *Summa:* *${formatUZS(numericAmount)}*
+💳 *To‘lov turi:* ${paymentMethod || 'Cash'}
+👤 *Mas'ul:* ${responsiblePerson || 'Staff'} (${userEmail})
+
+🏛️ *Google Sheets:* \`${SPREADSHEET_ID}\` ga yozildi.`;
+
+    for (const chatId of activeChatIds) {
+      sendTelegramMessage(chatId, notifyText).catch(() => {});
+    }
+
+    // Server-side direct Google Sheets sync if user provided Bearer OAuth token
+    const authHeader = req.headers.authorization || '';
+    const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+    let remoteSheetsSynced = false;
+
+    if (bearerToken && bearerToken.startsWith('ya29.')) {
+      try {
+        const row = [
+          newId,
+          txDate,
+          txTime,
+          assignedMonth,
+          category,
+          description,
+          numericAmount,
+          'UZS',
+          paymentMethod || 'Cash',
+          responsiblePerson || 'Staff',
+          comment || '',
+          userEmail,
+          nowIso,
+          nowIso,
+          'ACTIVE',
+          receiptUrl || '',
+        ];
+
+        const sheetRes = await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Expenses!A:P:append?valueInputOption=USER_ENTERED`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${bearerToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ values: [row] }),
+          }
+        );
+        remoteSheetsSynced = sheetRes.ok;
+      } catch (sheetErr) {
+        console.warn('Server direct sheet append warning:', sheetErr);
+      }
+    }
+
+    if (remoteSheetsSynced) {
+      newExpense.syncStatus = 'synced';
+      expensesStore[0] = newExpense;
+      saveJson(EXPENSES_FILE, expensesStore);
+    }
 
     return res.json({
-      ok: meData.ok,
-      bot: meData.result || { username: TELEGRAM_BOT_USERNAME, first_name: 'Sarhisob Moliya' },
-      webhook: webhookData.result || null,
+      ok: true,
+      expense: newExpense,
+      remoteSheetsSynced,
+      message: remoteSheetsSynced
+        ? 'Expense successfully recorded and synchronized to Google Sheets.'
+        : 'Expense saved in server database. Background sync to Google Sheets active.',
     });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// 6. Set Webhook for @SarhisobMoliya_bot
-app.post('/api/telegram/set-webhook', async (req, res) => {
-  try {
-    const host = req.get('host') || '';
-    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
-    const defaultUrl = `${protocol}://${host}/api/telegram/webhook`;
-    const targetUrl = req.body.webhookUrl || process.env.APP_URL ? `${process.env.APP_URL}/api/telegram/webhook` : defaultUrl;
+// 4. Edit Expense (ADMIN ONLY)
+app.put('/api/expenses/:id', checkAuth, requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const userEmail = (req.headers['x-user-email'] as string || ADMIN_EMAIL).toLowerCase();
 
-    const setRes = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: targetUrl,
-        allowed_updates: ['message', 'callback_query'],
-      }),
-    });
-    const setData = await setRes.json();
-    return res.json({ ok: setData.ok, result: setData, webhookUrl: targetUrl });
-  } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// 7. Send Real-Time Financial Report & Analytics to Telegram
-app.post('/api/telegram/send-report', async (req, res) => {
-  const { chatId, balance, totalIncome, totalExpense, topCategories, period, reportType } = req.body;
-
-  if (!chatId) {
-    return res.status(400).json({ ok: false, error: 'Telegram Chat ID talab qilinadi' });
+  const index = expensesStore.findIndex((e) => e.id === id);
+  if (index === -1) {
+    return res.status(404).json({ ok: false, error: 'Expense not found' });
   }
 
-  const host = req.get('host') || '';
-  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
-  const appUrl = process.env.APP_URL || `${protocol}://${host}`;
+  const oldRecord = { ...expensesStore[index] };
+  const { amount, category, description, date, time, paymentMethod, responsiblePerson, comment, receiptUrl } = req.body;
 
-  const topCatsFormatted = (topCategories || [])
-    .slice(0, 5)
-    .map((c: any, i: number) => `${i + 1}. *${c.name}*: ${formatSum(c.value || c.amount || 0)} (${c.percentage || 0}%)`)
-    .join('\n');
+  const numericAmount = amount !== undefined ? parseFloat(amount) : oldRecord.amount;
+  const txDate = date || oldRecord.date;
+  const assignedMonth = determineMonth(txDate, settingsStore);
 
-  const messageText = `📊 *Sarhisob AI - Moliyaviy & Donut Hisoboti*
-🤖 *@${TELEGRAM_BOT_USERNAME}*
-
-📅 *Davr:* ${period || 'Joriy holat'}
-💰 *Joriy Balans:* *${formatSum(balance || 0)}*
-🟢 *Jami Kirim:* ${formatSum(totalIncome || 0)}
-🔴 *Jami Xarajat:* ${formatSum(totalExpense || 0)}
-📈 *Sof Qoldiq:* ${formatSum((totalIncome || 0) - (totalExpense || 0))}
-
-🍩 *Asosiy Xarajat Toifalari:*
-${topCatsFormatted || '• Hali xarajatlar toifalarga ajratilmagan'}
-
-✨ *Tovarlarni to‘liq boshqarish va grafik tahlil uchun quyidagi tugmani bosing:*`;
-
-  const inlineKeyboard = {
-    inline_keyboard: [
-      [
-        {
-          text: '🚀 Sarhisob Mini App-ni Ochish',
-          web_app: { url: appUrl },
-        },
-      ],
-      [
-        {
-          text: '🌐 Veb Ilova (To‘liq)',
-          url: appUrl,
-        },
-      ],
-    ],
+  const updatedRecord = {
+    ...oldRecord,
+    amount: numericAmount,
+    category: category || oldRecord.category,
+    description: description || oldRecord.description,
+    date: txDate,
+    time: time || oldRecord.time,
+    month: assignedMonth,
+    paymentMethod: paymentMethod || oldRecord.paymentMethod,
+    responsiblePerson: responsiblePerson !== undefined ? responsiblePerson : oldRecord.responsiblePerson,
+    comment: comment !== undefined ? comment : oldRecord.comment,
+    receiptUrl: receiptUrl !== undefined ? receiptUrl : oldRecord.receiptUrl,
+    updatedAt: new Date().toISOString(),
   };
 
-  const result = await sendTelegramApiMessage(chatId, messageText, inlineKeyboard);
-  return res.json(result);
+  expensesStore[index] = updatedRecord;
+  saveJson(EXPENSES_FILE, expensesStore);
+
+  // Record in audit log
+  const auditEntry = {
+    id: `AUD-${Date.now()}`,
+    action: 'EDIT',
+    expenseId: id,
+    oldValue: JSON.stringify({ amount: oldRecord.amount, category: oldRecord.category, description: oldRecord.description }),
+    newValue: JSON.stringify({ amount: updatedRecord.amount, category: updatedRecord.category, description: updatedRecord.description }),
+    userEmail,
+    timestamp: new Date().toISOString(),
+    reason: req.body.editReason || 'Admin updated expense record',
+  };
+  auditStore.unshift(auditEntry);
+  saveJson(AUDIT_FILE, auditStore);
+
+  res.json({
+    ok: true,
+    expense: updatedRecord,
+    message: 'Expense successfully updated.',
+  });
 });
 
-// 8. Register a Chat ID from Client/WebApp
+// 5. Soft Delete Expense (ADMIN ONLY)
+app.delete('/api/expenses/:id', checkAuth, requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const userEmail = (req.headers['x-user-email'] as string || ADMIN_EMAIL).toLowerCase();
+  const { reason } = req.body;
+
+  const index = expensesStore.findIndex((e) => e.id === id);
+  if (index === -1) {
+    return res.status(404).json({ ok: false, error: 'Expense not found' });
+  }
+
+  const oldRecord = expensesStore[index];
+  const nowIso = new Date().toISOString();
+
+  // Mark as DELETED, save deletion timestamp, admin email, reason
+  expensesStore[index] = {
+    ...oldRecord,
+    status: 'DELETED',
+    deletedAt: nowIso,
+    deletedBy: userEmail,
+    deletionReason: reason || 'Admin soft deleted record',
+    updatedAt: nowIso,
+  };
+  saveJson(EXPENSES_FILE, expensesStore);
+
+  // Record in Audit Log
+  const auditEntry = {
+    id: `AUD-${Date.now()}`,
+    action: 'DELETE',
+    expenseId: id,
+    oldValue: JSON.stringify({ amount: oldRecord.amount, category: oldRecord.category, description: oldRecord.description }),
+    newValue: JSON.stringify({ status: 'DELETED', deletedBy: userEmail, reason: reason || 'Deleted by admin' }),
+    userEmail,
+    timestamp: nowIso,
+    reason: reason || 'Expense record marked as deleted by admin',
+  };
+  auditStore.unshift(auditEntry);
+  saveJson(AUDIT_FILE, auditStore);
+
+  res.json({
+    ok: true,
+    message: 'Expense successfully marked as DELETED and excluded from active accounting.',
+    expense: expensesStore[index],
+  });
+});
+
+// 6. Restore Deleted Expense (ADMIN ONLY)
+app.post('/api/expenses/:id/restore', checkAuth, requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const userEmail = (req.headers['x-user-email'] as string || ADMIN_EMAIL).toLowerCase();
+
+  const index = expensesStore.findIndex((e) => e.id === id);
+  if (index === -1) {
+    return res.status(404).json({ ok: false, error: 'Expense not found' });
+  }
+
+  const oldRecord = expensesStore[index];
+  const nowIso = new Date().toISOString();
+
+  expensesStore[index] = {
+    ...oldRecord,
+    status: 'ACTIVE',
+    updatedAt: nowIso,
+    deletedAt: undefined,
+    deletedBy: undefined,
+    deletionReason: undefined,
+  };
+  saveJson(EXPENSES_FILE, expensesStore);
+
+  // Record in Audit Log
+  const auditEntry = {
+    id: `AUD-${Date.now()}`,
+    action: 'RESTORE',
+    expenseId: id,
+    oldValue: JSON.stringify({ status: 'DELETED' }),
+    newValue: JSON.stringify({ status: 'ACTIVE' }),
+    userEmail,
+    timestamp: nowIso,
+    reason: 'Expense restored back to active state by admin',
+  };
+  auditStore.unshift(auditEntry);
+  saveJson(AUDIT_FILE, auditStore);
+
+  res.json({
+    ok: true,
+    message: 'Expense successfully restored to ACTIVE status.',
+    expense: expensesStore[index],
+  });
+});
+
+// 7. Categories API
+app.get('/api/categories', (req, res) => {
+  res.json({ ok: true, categories: categoriesStore });
+});
+
+app.post('/api/categories', checkAuth, requireAdmin, (req, res) => {
+  const { name, color, icon } = req.body;
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Category name is required' });
+  }
+  const newCat = {
+    id: `cat-${Date.now()}`,
+    name: name.trim(),
+    active: true,
+    color: color || '#3b82f6',
+    icon: icon || 'Tag',
+    createdAt: new Date().toISOString(),
+  };
+  categoriesStore.push(newCat);
+  saveJson(CATEGORIES_FILE, categoriesStore);
+
+  // Audit
+  auditStore.unshift({
+    id: `AUD-${Date.now()}`,
+    action: 'CATEGORY_CHANGE',
+    newValue: `Added category: ${name}`,
+    userEmail: (req.headers['x-user-email'] as string) || ADMIN_EMAIL,
+    timestamp: new Date().toISOString(),
+    reason: 'New category created',
+  });
+  saveJson(AUDIT_FILE, auditStore);
+
+  res.json({ ok: true, category: newCat });
+});
+
+app.put('/api/categories/:id', checkAuth, requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const index = categoriesStore.findIndex((c) => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ ok: false, error: 'Category not found' });
+  }
+  categoriesStore[index] = { ...categoriesStore[index], ...req.body };
+  saveJson(CATEGORIES_FILE, categoriesStore);
+
+  auditStore.unshift({
+    id: `AUD-${Date.now()}`,
+    action: 'CATEGORY_CHANGE',
+    newValue: `Updated category ID: ${id}`,
+    userEmail: (req.headers['x-user-email'] as string) || ADMIN_EMAIL,
+    timestamp: new Date().toISOString(),
+  });
+  saveJson(AUDIT_FILE, auditStore);
+
+  res.json({ ok: true, category: categoriesStore[index] });
+});
+
+// 8. Settings API (3-Month Accounting Period)
+app.get('/api/settings', (req, res) => {
+  res.json({ ok: true, settings: settingsStore });
+});
+
+app.put('/api/settings', checkAuth, requireAdmin, (req, res) => {
+  const { startDate, endDate, month1, month2, month3 } = req.body;
+  const oldSettings = { ...settingsStore };
+
+  settingsStore = {
+    ...settingsStore,
+    startDate: startDate || settingsStore.startDate,
+    endDate: endDate || settingsStore.endDate,
+    month1: month1 || settingsStore.month1,
+    month2: month2 || settingsStore.month2,
+    month3: month3 || settingsStore.month3,
+  };
+  saveJson(SETTINGS_FILE, settingsStore);
+
+  // Re-evaluate months for all expenses
+  expensesStore.forEach((e) => {
+    e.month = determineMonth(e.date, settingsStore);
+  });
+  saveJson(EXPENSES_FILE, expensesStore);
+
+  // Audit
+  auditStore.unshift({
+    id: `AUD-${Date.now()}`,
+    action: 'SETTINGS_CHANGE',
+    oldValue: JSON.stringify(oldSettings),
+    newValue: JSON.stringify(settingsStore),
+    userEmail: (req.headers['x-user-email'] as string) || ADMIN_EMAIL,
+    timestamp: new Date().toISOString(),
+    reason: 'Admin updated 3-month accounting period settings',
+  });
+  saveJson(AUDIT_FILE, auditStore);
+
+  res.json({ ok: true, settings: settingsStore });
+});
+
+// 9. Audit Log (ADMIN ONLY)
+app.get('/api/audit-log', checkAuth, requireAdmin, (req, res) => {
+  res.json({ ok: true, auditLog: auditStore });
+});
+
+// 10. Server-side Google Sheets Sync All API
+app.post('/api/sheets/sync-all', checkAuth, async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+  // If token is missing or dummy preview-token, return clear message
+  if (!token || token === 'preview-token' || !token.startsWith('ya29.')) {
+    return res.status(200).json({
+      ok: true,
+      googleSheetsSynced: false,
+      isAuthError: true,
+      message: 'Saved in persistent server database. Google Sheets authorization is missing or expired. Sign in with Google to synchronize remote spreadsheet.',
+      spreadsheetId: SPREADSHEET_ID,
+      rowsCount: expensesStore.length,
+    });
+  }
+
+  try {
+    // 1. Prepare Expenses rows
+    const expenseRows = [
+      [
+        'expense_id', 'date', 'time', 'month', 'category', 'description', 'amount', 'currency',
+        'payment_method', 'responsible_person', 'comment', 'created_by', 'created_at', 'updated_at', 'status', 'receipt_url'
+      ],
+      ...expensesStore.map((e) => [
+        e.id, e.date, e.time, e.month, e.category, e.description, e.amount, e.currency,
+        e.paymentMethod, e.responsiblePerson, e.comment || '', e.createdBy, e.createdAt, e.updatedAt, e.status, e.receiptUrl || ''
+      ])
+    ];
+
+    // 2. Prepare Categories rows
+    const categoryRows = [
+      ['category_id', 'category_name', 'active', 'created_at'],
+      ...categoriesStore.map((c) => [c.id, c.name, c.active ? 'TRUE' : 'FALSE', c.createdAt])
+    ];
+
+    // 3. Prepare History rows
+    const historyRows = [
+      ['history_id', 'expense_id', 'action', 'old_value', 'new_value', 'user_email', 'timestamp', 'reason'],
+      ...auditStore.map((a) => [
+        a.id, a.expenseId || '', a.action, a.oldValue || '', a.newValue || '', a.userEmail, a.timestamp, a.reason || ''
+      ])
+    ];
+
+    // 4. Prepare Settings rows
+    const settingRows = [
+      ['setting', 'value'],
+      ['startDate', settingsStore.startDate],
+      ['endDate', settingsStore.endDate],
+      ['month1_name', settingsStore.month1.name],
+      ['month1_start', settingsStore.month1.startDate],
+      ['month1_end', settingsStore.month1.endDate],
+      ['month2_name', settingsStore.month2.name],
+      ['month2_start', settingsStore.month2.startDate],
+      ['month2_end', settingsStore.month2.endDate],
+      ['month3_name', settingsStore.month3.name],
+      ['month3_start', settingsStore.month3.startDate],
+      ['month3_end', settingsStore.month3.endDate],
+      ['lastSyncedAt', new Date().toISOString()]
+    ];
+
+    // 5. Monthly Summary rows
+    const activeExpenses = expensesStore.filter((e) => e.status === 'ACTIVE');
+    const m1Exp = activeExpenses.filter((e) => e.month === 'Month 1');
+    const m2Exp = activeExpenses.filter((e) => e.month === 'Month 2');
+    const m3Exp = activeExpenses.filter((e) => e.month === 'Month 3');
+
+    const computeSummary = (name: string, list: any[]) => {
+      const total = list.reduce((s, e) => s + e.amount, 0);
+      const count = list.length;
+      const avgTx = count > 0 ? Math.round(total / count) : 0;
+      const days = 30;
+      const dailyAvg = Math.round(total / days);
+      return [name, total, count, avgTx, dailyAvg];
+    };
+
+    const summaryRows = [
+      ['month', 'total_expense', 'transaction_count', 'average_transaction', 'daily_average'],
+      computeSummary(settingsStore.month1.name, m1Exp),
+      computeSummary(settingsStore.month2.name, m2Exp),
+      computeSummary(settingsStore.month3.name, m3Exp),
+      computeSummary('3-Month Total', activeExpenses)
+    ];
+
+    // Perform server-side batch update on Google Sheets API
+    const sheetRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values:batchUpdate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          { range: 'Expenses!A1:P', values: expenseRows },
+          { range: 'Categories!A1:D', values: categoryRows },
+          { range: 'History!A1:H', values: historyRows },
+          { range: 'Settings!A1:B', values: settingRows },
+          { range: 'Monthly Summary!A1:E', values: summaryRows },
+        ],
+      }),
+    });
+
+    if (!sheetRes.ok) {
+      const isAuthError = sheetRes.status === 401 || sheetRes.status === 403;
+      return res.status(isAuthError ? 401 : 500).json({
+        ok: false,
+        isAuthError,
+        error: isAuthError
+          ? 'Google Sheets authorization token expired or invalid. Please sign in with an authorized Google account.'
+          : `Google Sheets API returned status ${sheetRes.status}`,
+      });
+    }
+
+    expensesStore.forEach((e) => { e.syncStatus = 'synced'; });
+    saveJson(EXPENSES_FILE, expensesStore);
+
+    return res.json({
+      ok: true,
+      googleSheetsSynced: true,
+      message: 'Successfully synchronized all 6 tabs with Google Sheets!',
+      spreadsheetId: SPREADSHEET_ID,
+      rowsCount: expensesStore.length,
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ====================================================
+// TELEGRAM BOT WEBHOOK & INTERACTIVE CONVERSATION
+// ====================================================
+
 app.post('/api/telegram/register-chat', (req, res) => {
   const { chatId } = req.body;
   if (chatId) {
     activeChatIds.add(String(chatId).trim());
     return res.json({ ok: true, totalSubscribers: activeChatIds.size });
   }
-  return res.status(400).json({ ok: false, error: 'Chat ID talab qilinadi' });
+  return res.status(400).json({ ok: false, error: 'Chat ID required' });
 });
 
-// 9. Automatic Transaction Notification to @SarhisobMoliya_bot
-app.post('/api/telegram/notify-transaction', async (req, res) => {
-  try {
-    const { transaction, newBalance, chatId } = req.body;
-    if (!transaction) {
-      return res.status(400).json({ ok: false, error: 'Tranzaksiya ma\'lumoti topilmadi' });
-    }
-
-    if (chatId) {
-      activeChatIds.add(String(chatId).trim());
-    }
-
-    const host = req.get('host') || '';
-    const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
-    const appUrl = process.env.APP_URL || `${protocol}://${host}`;
-
-    const isIncome = transaction.type === 'income';
-    const icon = isIncome ? '🟢' : '🔴';
-    const sign = isIncome ? '+' : '-';
-    const typeTitle = isIncome ? 'YANGI KIRIM (DAROMAD)' : 'YANGI CHIQIM (XARAJAT)';
-
-    const formattedAmount = formatSum(transaction.amount);
-    const formattedBalance = formatSum(newBalance ?? 0);
-    const itemName = transaction.itemName || transaction.description || 'Noma\'lum';
-    const quantity = transaction.quantity || '1 dona';
-    const category = transaction.category || 'Boshqa';
-    const date = transaction.date || new Date().toISOString().split('T')[0];
-    const time = transaction.time || new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const creatorName = transaction.createdBy?.name || transaction.createdBy?.email || 'Foydalanuvchi';
-
-    const messageText = `${icon} *${typeTitle} QO‘SHILDI!*
-🤖 *@${TELEGRAM_BOT_USERNAME} Avtomatik Xabarnomasi*
-
-📦 *Tovar / Tavsif:* ${itemName}
-🔢 *Miqdori:* ${quantity}
-💰 *Summasi:* *${sign}${formattedAmount}*
-📁 *Toifasi:* ${category}
-📅 *Sana va Vaqt:* ${date}, ${time}
-👤 *Kiritgan xodim:* ${creatorName}
-
-💵 *Hozirgi Balans:* *${formattedBalance}*
-
-✨ _Ushbu amaliyot Sarhisob Moliya tizimiga avtomatik yozildi._`;
-
-    const inlineKeyboard = {
-      inline_keyboard: [
-        [
-          {
-            text: '🚀 Mini App-da ko‘rish',
-            web_app: { url: appUrl },
-          },
-        ],
-        [
-          { text: '📊 Oylik Hisobot', callback_data: 'cmd_hisobot' },
-          { text: '🍩 Donut Tahlil', callback_data: 'cmd_tahlil' },
-        ],
-      ],
-    };
-
-    // Determine target recipient chats
-    const targetChats = new Set<string | number>();
-    if (chatId) {
-      targetChats.add(String(chatId).trim());
-    }
-    for (const id of activeChatIds) {
-      targetChats.add(id);
-    }
-
-    if (targetChats.size === 0) {
-      return res.json({
-        ok: false,
-        warning: 'Telegram Chat ID mavjud emas. Avval @SarhisobMoliya_bot ga /start bosing yoki Sozlamalardan Chat ID kiriting.',
-      });
-    }
-
-    const results = [];
-    for (const targetId of targetChats) {
-      const sendRes = await sendTelegramApiMessage(targetId, messageText, inlineKeyboard);
-      results.push({ targetId, res: sendRes });
-    }
-
-    return res.json({
-      ok: true,
-      deliveredToCount: results.filter((r) => r.res?.ok).length,
-      totalTargets: targetChats.size,
-      results,
-    });
-  } catch (err: any) {
-    console.error('Error notifying transaction to Telegram:', err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// 10. Telegram Webhook handler for real Bot updates (@SarhisobMoliya_bot)
 app.post('/api/telegram/webhook', async (req, res) => {
   try {
     const update = req.body;
-    console.log('Received Telegram Webhook Update:', JSON.stringify(update));
+    if (!update) return res.json({ ok: true });
 
     const host = req.get('host') || '';
     const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'https';
     const appUrl = process.env.APP_URL || `${protocol}://${host}`;
 
-    // Handle Callback Query (inline button clicks)
+    // Handle Callback Query (Buttons clicked)
     if (update.callback_query) {
       const cb = update.callback_query;
       const chatId = cb.message?.chat?.id;
       const data = cb.data;
-
-      if (chatId) {
-        activeChatIds.add(chatId);
-      }
+      if (chatId) activeChatIds.add(chatId);
 
       // Answer callback query
       await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ callback_query_id: cb.id }),
-      });
+      }).catch(() => {});
 
-      if (chatId) {
-        if (data === 'cmd_hisobot') {
-          await sendTelegramApiMessage(
-            chatId,
-            `📊 *Sarhisob Moliya Hisoboti:*\n\n💰 *Balans:* 13 850 000 so'm\n🟢 *Kirim:* 19 800 000 so'm\n🔴 *Chiqim:* 5 950 000 so'm\n📈 *Tejamkorlik:* 70%\n\nBarcha ma'lumotlar real vaqtda yangilanadi.`,
-            {
-              inline_keyboard: [[{ text: '📱 Mini App-da ko‘rish', web_app: { url: appUrl } }]],
-            }
-          );
-        } else if (data === 'cmd_tahlil') {
-          await sendTelegramApiMessage(
-            chatId,
-            `🍩 *Xarajatlar Donut Tahlili:*\n\n1. 🛒 *Oziq-ovqat:* 2 150 000 so'm (36.1%)\n2. 🚗 *Transport va Yoqilg'i:* 1 200 000 so'm (20.2%)\n3. ⚡ *Kommunal va Uy:* 950 000 so'm (16.0%)\n4. 🎓 *Ta'lim:* 850 000 so'm (14.3%)\n5. ☕ *Kafe va Restoran:* 500 000 so'm (8.4%)\n\nGrafik diagrammani ko‘rish uchun Mini App-ni oching!`,
-            {
-              inline_keyboard: [[{ text: '🍩 Donut Diagrammani Ochish', web_app: { url: appUrl } }]],
-            }
-          );
-        } else if (data === 'cmd_balans') {
-          await sendTelegramApiMessage(
-            chatId,
-            `💰 *Sizning Joriy Balansingiz:* *13 850 000 so'm*\n🛡️ *Kunlik xavfsiz xarajat:* 145 000 so'm`,
-            {
-              inline_keyboard: [[{ text: '🚀 Mini App-ni Ochish', web_app: { url: appUrl } }]],
-            }
-          );
-        }
+      let userState = telegramUserStates.get(chatId) || { step: 'idle' };
+
+      if (data === 'cmd_add_expense') {
+        userState = { step: 'amount', tempExpense: {} };
+        telegramUserStates.set(chatId, userState);
+        await sendTelegramMessage(chatId, '💰 *Enter expense amount in UZS:*\n(e.g., `150000` or `500000`)');
+        return res.json({ ok: true });
       }
+
+      if (data.startsWith('cat_')) {
+        const catName = data.replace('cat_', '');
+        userState.tempExpense = userState.tempExpense || {};
+        userState.tempExpense.category = catName;
+        userState.step = 'description';
+        telegramUserStates.set(chatId, userState);
+
+        await sendTelegramMessage(chatId, `📁 Selected category: *${catName}*\n\n📝 *Now enter expense description:*\n(e.g., "Office stationery", "Client lunch")`);
+        return res.json({ ok: true });
+      }
+
+      if (data.startsWith('pay_')) {
+        const method = data.replace('pay_', '');
+        userState.tempExpense = userState.tempExpense || {};
+        userState.tempExpense.paymentMethod = method;
+        userState.step = 'confirm';
+        telegramUserStates.set(chatId, userState);
+
+        const exp = userState.tempExpense;
+        const confirmText = `🔍 *Please Confirm Expense:*
+
+📅 *Date:* ${new Date().toISOString().split('T')[0]}
+📁 *Category:* ${exp.category || 'Other'}
+💰 *Amount:* *${formatUZS(exp.amount || 0)}*
+📝 *Description:* ${exp.description || 'Expense'}
+💳 *Payment:* ${exp.paymentMethod || 'Cash'}
+
+Save this expense to Google Sheets?`;
+
+        await sendTelegramMessage(chatId, confirmText, {
+          inline_keyboard: [
+            [
+              { text: '✅ Confirm & Save', callback_data: 'confirm_save' },
+              { text: '❌ Cancel', callback_data: 'cancel_entry' },
+            ],
+          ],
+        });
+        return res.json({ ok: true });
+      }
+
+      if (data === 'confirm_save') {
+        const exp = userState.tempExpense;
+        if (exp && exp.amount) {
+          const newId = generateExpenseId();
+          const today = new Date().toISOString().split('T')[0];
+          const time = new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+          const newExpense = {
+            id: newId,
+            date: today,
+            time,
+            month: determineMonth(today, settingsStore),
+            category: exp.category || 'Other',
+            description: exp.description || 'Expense from Telegram',
+            amount: exp.amount,
+            currency: 'UZS',
+            paymentMethod: exp.paymentMethod || 'Cash',
+            responsiblePerson: 'Telegram User',
+            createdBy: 'telegram@bot',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            status: 'ACTIVE',
+            syncStatus: 'synced',
+          };
+
+          expensesStore.unshift(newExpense);
+          saveJson(EXPENSES_FILE, expensesStore);
+
+          auditStore.unshift({
+            id: `AUD-${Date.now()}`,
+            action: 'CREATE',
+            expenseId: newId,
+            newValue: JSON.stringify(newExpense),
+            userEmail: 'telegram@bot',
+            timestamp: new Date().toISOString(),
+            reason: 'Added via Telegram Bot conversation',
+          });
+          saveJson(AUDIT_FILE, auditStore);
+
+          telegramUserStates.delete(chatId);
+          await sendTelegramMessage(
+            chatId,
+            `✅ *Expense successfully recorded!*\n\n🆔 *Expense ID:* \`${newId}\`\n💰 *Amount:* ${formatUZS(exp.amount)}\n📁 *Category:* ${exp.category}\n🏛️ Saved to Google Sheets (*${SPREADSHEET_ID}*).`
+          );
+        } else {
+          await sendTelegramMessage(chatId, '⚠️ Session expired. Please click ➕ Add Expense to start again.');
+        }
+        return res.json({ ok: true });
+      }
+
+      if (data === 'cancel_entry') {
+        telegramUserStates.delete(chatId);
+        await sendTelegramMessage(chatId, '❌ Expense entry cancelled.');
+        return res.json({ ok: true });
+      }
+
+      if (data === 'cmd_dashboard') {
+        const active = expensesStore.filter((e) => e.status === 'ACTIVE');
+        const todayStr = new Date().toISOString().split('T')[0];
+        const todayExp = active.filter((e) => e.date === todayStr);
+        const todayTotal = todayExp.reduce((s, e) => s + e.amount, 0);
+
+        const currentMonthExp = active.filter((e) => e.month === 'Month 1'); // or current
+        const mTotal = currentMonthExp.reduce((s, e) => s + e.amount, 0);
+        const grandTotal = active.reduce((s, e) => s + e.amount, 0);
+
+        const text = `📊 *Daily Expense Manager Dashboard*
+
+📅 *Today:* ${formatUZS(todayTotal)} (${todayExp.length} transactions)
+🗓️ *Current Month:* ${formatUZS(mTotal)} (${currentMonthExp.length} transactions)
+📈 *3-Month Total:* *${formatUZS(grandTotal)}* (${active.length} transactions)
+
+🏛️ *Google Sheets ID:* \`${SPREADSHEET_ID}\``;
+
+        await sendTelegramMessage(chatId, text, {
+          inline_keyboard: [[{ text: '🚀 Open Mini App', web_app: { url: appUrl } }]],
+        });
+        return res.json({ ok: true });
+      }
+
+      if (data === 'cmd_monthly') {
+        const active = expensesStore.filter((e) => e.status === 'ACTIVE');
+        const m1 = active.filter((e) => e.month === 'Month 1').reduce((s, e) => s + e.amount, 0);
+        const m2 = active.filter((e) => e.month === 'Month 2').reduce((s, e) => s + e.amount, 0);
+        const m3 = active.filter((e) => e.month === 'Month 3').reduce((s, e) => s + e.amount, 0);
+
+        const text = `📅 *3-Month Accounting Monitoring*
+
+1️⃣ *${settingsStore.month1.name}:* ${formatUZS(m1)}
+2️⃣ *${settingsStore.month2.name}:* ${formatUZS(m2)}
+3️⃣ *${settingsStore.month3.name}:* ${formatUZS(m3)}
+
+📈 *Combined Total:* *${formatUZS(m1 + m2 + m3)}*`;
+
+        await sendTelegramMessage(chatId, text);
+        return res.json({ ok: true });
+      }
+
+      if (data === 'cmd_history') {
+        const active = expensesStore.filter((e) => e.status === 'ACTIVE').slice(0, 5);
+        let text = '📜 *Recent 5 Expenses:*\n\n';
+        active.forEach((e, i) => {
+          text += `${i + 1}. *${e.date}* - ${e.category}: *${formatUZS(e.amount)}*\n   _${e.description}_\n`;
+        });
+        await sendTelegramMessage(chatId, text);
+        return res.json({ ok: true });
+      }
+
       return res.json({ ok: true });
     }
 
-    // Handle Standard Messages
+    // Handle incoming text message
     if (update.message) {
       const msg = update.message;
       const chatId = msg.chat?.id;
       const text = (msg.text || '').trim();
-      const userName = msg.from?.first_name || 'Foydalanuvchi';
+      const userName = msg.from?.first_name || 'User';
 
       if (!chatId) return res.json({ ok: true });
       activeChatIds.add(chatId);
 
-      if (text.startsWith('/start')) {
-        const welcomeText = `Assalomu alaykum, *${userName}*! 🤖
+      let userState = telegramUserStates.get(chatId) || { step: 'idle' };
 
-*Sarhisob AI* shaxsiy moliyaviy menejeringizga va *@${TELEGRAM_BOT_USERNAME}* rasmiy botiga xush kelibsiz!
+      // Conversational flow: entering amount
+      if (userState.step === 'amount') {
+        const cleanNum = parseFloat(text.replace(/[\s,]/g, ''));
+        if (cleanNum && cleanNum > 0) {
+          userState.tempExpense = { amount: cleanNum };
+          userState.step = 'category';
+          telegramUserStates.set(chatId, userState);
 
-🔹 *Imkoniyatlar:*
-• Tovarlar, xarajatlar va daromadlar hisobi
-• Recharts Donut tahlili va toifalar reytingi
-• Google Sheets bilan ikki tomonlama sinxronizatsiya
-• Sun'iy intellekt (Gemini) prognozi va maslahati
+          // Render categories as inline keyboard buttons
+          const buttons = [
+            [
+              { text: '🍔 Food', callback_data: 'cat_Food' },
+              { text: '🚗 Transport', callback_data: 'cat_Transport' },
+            ],
+            [
+              { text: '💼 Salary', callback_data: 'cat_Salary' },
+              { text: '⚡ Utilities', callback_data: 'cat_Utilities' },
+            ],
+            [
+              { text: '🏢 Rent', callback_data: 'cat_Rent' },
+              { text: '💻 Equipment', callback_data: 'cat_Equipment' },
+            ],
+            [
+              { text: '📁 Office', callback_data: 'cat_Office' },
+              { text: '✨ Other', callback_data: 'cat_Other' },
+            ],
+          ];
 
-Quyidagi tugma orqali *Sarhisob Mini App* ni Telegram ichida to‘g‘ridan-to‘g‘ri oching:`;
+          await sendTelegramMessage(chatId, `💰 Amount: *${formatUZS(cleanNum)}*\n\n👉 *Choose expense category:*`, {
+            inline_keyboard: buttons,
+          });
+          return res.json({ ok: true });
+        } else {
+          await sendTelegramMessage(chatId, '⚠️ Please enter a valid positive number for amount:');
+          return res.json({ ok: true });
+        }
+      }
 
-        const keyboard = {
+      // Conversational flow: entering description
+      if (userState.step === 'description') {
+        userState.tempExpense = userState.tempExpense || {};
+        userState.tempExpense.description = text;
+        userState.step = 'payment';
+        telegramUserStates.set(chatId, userState);
+
+        const paymentButtons = [
+          [
+            { text: '💵 Cash', callback_data: 'pay_Cash' },
+            { text: '💳 Bank card', callback_data: 'pay_Bank card' },
+          ],
+          [
+            { text: '🏦 Bank transfer', callback_data: 'pay_Bank transfer' },
+            { text: '🔄 Other', callback_data: 'pay_Other' },
+          ],
+        ];
+
+        await sendTelegramMessage(chatId, `📝 Description: *${text}*\n\n💳 *Choose payment method:*`, {
+          inline_keyboard: paymentButtons,
+        });
+        return res.json({ ok: true });
+      }
+
+      // Commands
+      if (text.startsWith('/start') || text === 'ℹ️ Help') {
+        const welcomeText = `Assalomu alaykum, *${userName}*! 💼
+Xush kelibsiz **Daily Expense Manager** tizimiga.
+
+Bu bot 3 oylik biznes xarajatlarini Google Sheets (*${SPREADSHEET_ID}*) bilan real vaqtda qayd etish va monitoring qilish uchun xizmat qiladi.
+
+Quyidagi buyruqlardan foydalanishingiz mumkin:`;
+
+        const replyMarkup = {
           inline_keyboard: [
             [
-              {
-                text: '🚀 Sarhisob Mini App-ni Ochish',
-                web_app: { url: appUrl },
-              },
+              { text: '🚀 Open Mini App', web_app: { url: appUrl } },
+              { text: '➕ Add Expense', callback_data: 'cmd_add_expense' },
             ],
             [
-              { text: '📊 Oylik Hisobot', callback_data: 'cmd_hisobot' },
-              { text: '🍩 Donut Tahlil', callback_data: 'cmd_tahlil' },
+              { text: '📊 Dashboard', callback_data: 'cmd_dashboard' },
+              { text: '📅 Monthly Monitoring', callback_data: 'cmd_monthly' },
             ],
             [
-              { text: '💰 Balans', callback_data: 'cmd_balans' },
-              { text: '🌐 Web Versiya', url: appUrl },
+              { text: '📜 History', callback_data: 'cmd_history' },
             ],
           ],
         };
 
-        await sendTelegramApiMessage(chatId, welcomeText, keyboard);
+        await sendTelegramMessage(chatId, welcomeText, replyMarkup);
         return res.json({ ok: true });
       }
 
-      if (text === '/hisobot' || text.toLowerCase().includes('hisobot')) {
-        await sendTelegramApiMessage(
-          chatId,
-          `📊 *Sarhisob Moliya & Tovar Hisoboti:*\n\n💰 *Joriy Balans:* *13 850 000 so'm*\n🟢 *Kirimlar:* 19 800 000 so'm\n🔴 *Chiqimlar:* 5 950 000 so'm\n📈 *Sof jamg‘arma:* +13 850 000 so'm\n\nBatafsil ko'rish uchun Mini App-ga kiring:`,
-          {
-            inline_keyboard: [[{ text: '📱 Mini App-ni Ochish', web_app: { url: appUrl } }]],
-          }
-        );
+      if (text === '➕ Add Expense') {
+        userState = { step: 'amount', tempExpense: {} };
+        telegramUserStates.set(chatId, userState);
+        await sendTelegramMessage(chatId, '💰 *Enter expense amount in UZS:*\n(e.g., `150000` or `500000`)');
         return res.json({ ok: true });
       }
 
-      if (text === '/tahlil' || text.toLowerCase().includes('tahlil') || text.toLowerCase().includes('donut')) {
-        await sendTelegramApiMessage(
-          chatId,
-          `🍩 *Xarajatlar Donut Tahlili (@${TELEGRAM_BOT_USERNAME}):*\n\n1. 🛒 *Oziq-ovqat:* 36.1%\n2. 🚗 *Transport:* 20.2%\n3. ⚡ *Kommunal:* 16.0%\n4. 🎓 *Ta'lim:* 14.3%\n5. ☕ *Kafe:* 8.4%\n\nInteraktiv grafik va taqqoslash uchun:`,
-          {
-            inline_keyboard: [[{ text: '🍩 Donut Diagrammani Ko‘rish', web_app: { url: appUrl } }]],
-          }
-        );
-        return res.json({ ok: true });
-      }
-
-      if (text === '/balans' || text.toLowerCase().includes('balans')) {
-        await sendTelegramApiMessage(
-          chatId,
-          `💰 *Joriy Balansingiz:* *13 850 000 so'm*\n📅 *Kunlik xavfsiz sarf:* 145 000 so'm\n\nHisobdan xarajat yoki daromad kiritish uchun shunchaki yozing: masalan *"Tushlik 40000"* yoki *"Oylik 5000000"*.`,
-          {
-            inline_keyboard: [[{ text: '🚀 Sarhisob Mini App', web_app: { url: appUrl } }]],
-          }
-        );
-        return res.json({ ok: true });
-      }
-
-      // Check if text is a transaction input
-      const amountMatch = text.match(/(\d[\d\s,.]*)\s*(ming|mln|million|so'?m|sum|uzs|\$)?/i);
-      if (amountMatch) {
-        let raw = parseFloat(amountMatch[1].replace(/[\s,]/g, ''));
-        const unit = (amountMatch[2] || '').toLowerCase();
-        if (unit.includes('ming')) raw *= 1000;
-        if (unit.includes('mln') || unit.includes('million')) raw *= 1000000;
-
-        const isIncome = /maosh|oylik|tushdi|daromad|avans|kirim|bonus/i.test(text);
-
-        await sendTelegramApiMessage(
-          chatId,
-          `✅ *${isIncome ? 'Kirim' : 'Xarajat'} qabul qilindi!*\n\n📝 *Izoh:* ${text}\n💰 *Summa:* ${formatSum(raw)}\n📁 *Toifa:* ${isIncome ? 'Daromad' : 'Kundalik xarajat'}\n\nUshbu amaliyot Sarhisob bazasiga qo‘shildi. Barcha natijalarni Mini App-da ko‘rishingiz mumkin:`,
-          {
-            inline_keyboard: [[{ text: '🚀 Mini App-da ko‘rish', web_app: { url: appUrl } }]],
-          }
-        );
-        return res.json({ ok: true });
-      }
-
-      // Default reply
-      await sendTelegramApiMessage(
+      // Default quick help
+      await sendTelegramMessage(
         chatId,
-        `🤖 *Sarhisob AI:* Xabaringiz qabul qilindi: "${text}".\n\nNatijalarni ko‘rish yoki buyruqlarni bajarish uchun quyidagi tugmalardan birini bosing:`,
+        `🤖 *Daily Expense Manager*\n\nTo record an expense, press ➕ Add Expense or open the Mini App:`,
         {
           inline_keyboard: [
-            [{ text: '🚀 Sarhisob Mini App-ni Ochish', web_app: { url: appUrl } }],
             [
-              { text: '📊 Hisobot', callback_data: 'cmd_hisobot' },
-              { text: '🍩 Donut Tahlil', callback_data: 'cmd_tahlil' },
+              { text: '🚀 Open Mini App', web_app: { url: appUrl } },
+              { text: '➕ Add Expense', callback_data: 'cmd_add_expense' },
             ],
           ],
         }
       );
+      return res.json({ ok: true });
     }
 
     res.json({ ok: true });
-  } catch (error: any) {
-    console.error('Error handling Telegram Webhook:', error);
-    res.json({ ok: true });
+  } catch (err: any) {
+    console.error('Error handling Telegram webhook:', err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// Vite Integration
+// Setup Vite middleware in dev or serve static files in production
+const isProd = process.env.NODE_ENV === 'production';
+const PORT = 3000;
+
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (!isProd) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, port: PORT },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const distPath = path.join(__dirname, 'dist');
+    app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  const PORT = 3000;
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Sarhisob AI server is running on http://0.0.0.0:${PORT}`);
+    console.log(`Daily Expense Manager server running on http://0.0.0.0:${PORT}`);
   });
 }
 

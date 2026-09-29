@@ -1,6 +1,6 @@
 {
-  "name": "Sarhisob AI - Tovarlar va Moliya Boshqaruvi",
-  "description": "Tovarlar, miqdorlar, summalar va vaqt hisobi, Google Sheets jamlangan integratsiyasi, Users va Admin paneli hamda Telegram Mini App.",
+  "name": "Daily Expense Manager",
+  "description": "3-month business daily expense manager with Google Sheets database, Telegram Bot (@Kukukaka8_bot), Telegram Mini App, and role-based access control.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
